@@ -56,7 +56,7 @@ function App() {
 
   const handleEndTurn = () => {
     if (!game) return
-    const next = executeRound(networkManager.submitTurn({ state: game }))
+    const next = executeRound(networkManager.submitTurn(game))
     setGame(next.mode === 'tutorial' ? advanceTutorial(next) : next)
   }
 

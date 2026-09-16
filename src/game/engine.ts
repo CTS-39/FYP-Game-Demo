@@ -167,9 +167,6 @@ function revealAround(state: GameState, playerId: PlayerId, x: number, y: number
 }
 
 function refreshVision(state: GameState) {
-  for (const player of Object.values(state.players)) {
-    player.territory = []
-  }
   for (const building of state.buildings) {
     claimTile(state, building.playerId, building.x, building.y)
     for (const point of getNeighbors(building.x, building.y)) {
@@ -414,10 +411,7 @@ export function executeRound(current: GameState) {
       if (action.type === 'MOVE' && action.direction) report.details.push(moveUnit(state, unit, action.direction))
       if (action.type === 'COLLECT') report.details.push(collectAtTile(state, unit))
       if (action.type === 'BUILD' && action.buildingType) report.details.push(buildOnTile(state, unit, action.buildingType))
-      if (action.type === 'WAIT') {
-        unit.energy = Math.min(6, unit.energy + 1)
-        report.details.push(`${unit.name} waited to recharge.`)
-      }
+      if (action.type === 'WAIT') report.details.push(`${unit.name} waited to recharge.`)
     }
     unit.energy = Math.min(6, unit.energy + 1)
   }
