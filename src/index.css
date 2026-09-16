@@ -415,3 +415,11 @@ button:disabled {
   cursor: not-allowed;
   box-shadow: none;
 }
+
+.fast-mode .tile {
+  transition-duration: 0.12s;
+}
+
+.slow-mode .tile {
+  transition-duration: 0.4s;
+}

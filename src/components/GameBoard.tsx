@@ -34,6 +34,11 @@ const roleIcons = {
 
 export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: GameBoardProps) {
   const humanVision = game.players.human.revealed
+  const ownerByTile = new Map<string, (typeof game.players)[keyof typeof game.players]>()
+
+  for (const player of Object.values(game.players)) {
+    for (const key of player.territory) ownerByTile.set(key, player)
+  }
 
   return (
     <section className="world-section panel">
@@ -49,7 +54,7 @@ export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: Ga
           {game.map.flat().map((tile) => {
             const key = tileKey(tile.x, tile.y)
             const visible = humanVision.includes(key)
-            const owner = Object.values(game.players).find((player) => player.territory.includes(key))
+            const owner = ownerByTile.get(key)
             const { building, units } = getTileSummary(tile, game)
             const selected = selectedTile === key
             return (

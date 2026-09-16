@@ -90,7 +90,7 @@ function App() {
   }
 
   return (
-    <main className={`app-shell ${settings.highContrast ? 'high-contrast' : ''}`}>
+    <main className={`app-shell ${settings.highContrast ? 'high-contrast' : ''} ${settings.fastMode ? 'fast-mode' : 'slow-mode'}`}>
       <header className="top-bar panel">
         <div>
           <p className="eyebrow">Code Kingdoms</p>
