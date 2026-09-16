@@ -168,7 +168,6 @@ function revealAround(state: GameState, playerId: PlayerId, x: number, y: number
 
 function refreshVision(state: GameState) {
   for (const player of Object.values(state.players)) {
-    player.revealed = []
     player.territory = []
   }
   for (const building of state.buildings) {
@@ -184,7 +183,7 @@ function refreshVision(state: GameState) {
   }
 }
 
-function moveUnit(state: GameState, unit: UnitState, direction: ProgramNode extends never ? never : 'NORTH' | 'SOUTH' | 'EAST' | 'WEST') {
+function moveUnit(state: GameState, unit: UnitState, direction: import('./types').Direction) {
   const delta = {
     NORTH: { x: 0, y: -1 },
     SOUTH: { x: 0, y: 1 },
@@ -283,6 +282,22 @@ function updateScores(state: GameState) {
   }
 }
 
+function refreshPlayerConcepts(state: GameState, playerId: PlayerId) {
+  const concepts = new Set<string>(['Sequence'])
+  for (const unit of state.units.filter((entry) => entry.playerId === playerId)) {
+    for (const concept of summarizeConcepts(unit.program)) {
+      concepts.add(concept)
+    }
+  }
+  state.players[playerId].conceptsUsed = Array.from(concepts)
+}
+
+function refreshAllConcepts(state: GameState) {
+  for (const playerId of Object.keys(state.players) as PlayerId[]) {
+    refreshPlayerConcepts(state, playerId)
+  }
+}
+
 function detectVictory(state: GameState): VictoryState | null {
   const players = Object.values(state.players)
   const expansionWinner = players.find((player) => player.territory.length >= 24)
@@ -341,7 +356,7 @@ export function updateUnitProgram(state: GameState, unitId: string, program: Pro
   const unit = next.units.find((entry) => entry.id === unitId)
   if (!unit) return state
   unit.program = program
-  next.players[unit.playerId].conceptsUsed = summarizeConcepts(program)
+  refreshPlayerConcepts(next, unit.playerId)
   return next
 }
 
@@ -377,7 +392,6 @@ export function executeRound(current: GameState) {
       const unit = state.units.find((entry) => entry.id === unitId)
       if (unit) {
         unit.program = program
-        state.players[playerId].conceptsUsed = Array.from(new Set([...state.players[playerId].conceptsUsed, ...summarizeConcepts(program)]))
       }
     }
     state.players[playerId].lastReason = decision.reason
@@ -413,6 +427,7 @@ export function executeRound(current: GameState) {
   }
   applyBuildingYields(state, report.details)
   refreshVision(state)
+  refreshAllConcepts(state)
   updateScores(state)
   state.round += 1
   state.winner = detectVictory(state)
