@@ -55,6 +55,7 @@ export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: Ga
             />
           </strong>
           <p>{game.report.details[0]}</p>
+          <p className="owner-legend">🟢 You / 🔴 Enemy</p>
         </div>
         <div className="phase-pill">Round {game.round}/{game.maxRounds}</div>
       </div>
@@ -80,15 +81,16 @@ export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: Ga
               >
                 <span className="tile-top">
                   <span>{visible ? terrainIcons[tile.terrain] : '❔'}</span>
-                  {visible && owner ? <span className="owner-dot" style={{ background: owner.accent }} /> : null}
+                  {visible && owner ? <span className={`owner-badge ${owner.id === 'human' ? 'friendly' : 'enemy'}`}>{owner.id === 'human' ? '🟢' : '🔴'} {owner.emblem}</span> : null}
                 </span>
                 <span className="tile-label">{visible ? terrainNames[tile.terrain] : 'Fog'}</span>
                 <span className="tile-stack">
                   {visible && building ? <span>{buildingIcons[building.type]}</span> : null}
                   {visible
                     ? units.map((unit) => (
-                        <span key={unit.id} className={unit.playerId === 'human' ? 'human-unit' : ''}>
-                          {roleIcons[unit.role]}
+                        <span key={unit.id} className={`unit-chip ${unit.playerId === 'human' ? 'friendly' : 'enemy'}`}>
+                          <span>{unit.playerId === 'human' ? '🟢' : '🔴'}</span>
+                          <span>{roleIcons[unit.role]}</span>
                         </span>
                       ))
                     : null}

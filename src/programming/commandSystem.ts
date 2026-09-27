@@ -63,22 +63,25 @@ export function createActionNode(type: ActionNode['type']): ActionNode {
   }
 }
 
-export function createRepeatNode(): RepeatNode {
+export function createRepeatNode(defaultAction: ActionNode['type'] = 'MOVE'): RepeatNode {
   return {
     id: createNodeId(),
     type: 'REPEAT',
     times: 2,
-    children: [createActionNode('MOVE')],
+    children: [createActionNode(defaultAction)],
   }
 }
 
-export function createIfNode(): IfNode {
+export function createIfNode(
+  thenAction: ActionNode['type'] = 'COLLECT',
+  elseAction: ActionNode['type'] = 'MOVE',
+): IfNode {
   return {
     id: createNodeId(),
     type: 'IF',
     condition: 'ON_RESOURCE',
-    thenChildren: [createActionNode('COLLECT')],
-    elseChildren: [createActionNode('MOVE')],
+    thenChildren: [createActionNode(thenAction)],
+    elseChildren: [createActionNode(elseAction)],
   }
 }
 
@@ -107,7 +110,7 @@ export function createSampleExplorerProgram() {
 export function validateProgram(program: ProgramNode[], player: PlayerState, unit: UnitState) {
   const messages: string[] = []
   const stats = getProgramStats(program)
-  const estimatedActions = estimateProgramActionCount(program)
+  const estimatedActions = estimateBatteryActionCost(program)
 
   if (stats.totalNodes > PROGRAM_LIMITS.maxTotalNodes) {
     messages.push(`⚠️ Program is too large (${stats.totalNodes}/${PROGRAM_LIMITS.maxTotalNodes}). Remove some blocks.`)
@@ -119,7 +122,7 @@ export function validateProgram(program: ProgramNode[], player: PlayerState, uni
     messages.push(`⚠️ Program nesting is too deep (${stats.maxDepth}/${PROGRAM_LIMITS.maxNestingDepth}).`)
   }
   if (estimatedActions > unit.energy) {
-    messages.push(`⚠️ Too many queued actions for current energy (${estimatedActions}/${unit.energy}).`)
+    messages.push(`⚠️ Too many battery-cost actions for current battery (${estimatedActions}/${unit.energy}).`)
   }
 
   if (program.length === 0) {
@@ -157,6 +160,7 @@ export function validateProgram(program: ProgramNode[], player: PlayerState, uni
   }
 
   visit(program)
+  messages.push(...validateWaitRules(program))
   return Array.from(new Set(messages))
 }
 
@@ -247,6 +251,66 @@ export function estimateProgramActionCount(program: ProgramNode[]) {
   return countBranch(program)
 }
 
+export function estimateBatteryActionCost(program: ProgramNode[]) {
+  const countBranch = (nodes: ProgramNode[]): number =>
+    nodes.reduce((total, node) => {
+      if (node.type === 'REPEAT') return total + node.times * countBranch(node.children)
+      if (node.type === 'IF') return total + Math.max(countBranch(node.thenChildren), countBranch(node.elseChildren))
+      return total + (node.type === 'WAIT' ? 0 : 1)
+    }, 0)
+
+  return countBranch(program)
+}
+
+export function hasWaitAction(program: ProgramNode[]) {
+  const visit = (nodes: ProgramNode[]): boolean => {
+    for (const node of nodes) {
+      if (node.type === 'WAIT') return true
+      if (node.type === 'REPEAT' && visit(node.children)) return true
+      if (node.type === 'IF' && (visit(node.thenChildren) || visit(node.elseChildren))) return true
+    }
+    return false
+  }
+  return visit(program)
+}
+
+function maxWaitsOnPath(nodes: ProgramNode[]): number {
+  return nodes.reduce((total, node) => {
+    if (node.type === 'WAIT') return total + 1
+    if (node.type === 'REPEAT') return total + node.times * maxWaitsOnPath(node.children)
+    if (node.type === 'IF') return total + Math.max(maxWaitsOnPath(node.thenChildren), maxWaitsOnPath(node.elseChildren))
+    return total
+  }, 0)
+}
+
+function validateWaitOrder(nodes: ProgramNode[], messages: string[], insideRepeat = false) {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]
+    if (node.type === 'WAIT') {
+      if (insideRepeat) {
+        messages.push('⚠️ WAIT cannot be used inside REPEAT blocks.')
+      }
+      if (index !== nodes.length - 1) {
+        messages.push('⚠️ WAIT must be the last action in its block (no actions after WAIT).')
+      }
+    }
+    if (node.type === 'REPEAT') validateWaitOrder(node.children, messages, true)
+    if (node.type === 'IF') {
+      validateWaitOrder(node.thenChildren, messages, insideRepeat)
+      validateWaitOrder(node.elseChildren, messages, insideRepeat)
+    }
+  }
+}
+
+export function validateWaitRules(program: ProgramNode[]) {
+  const messages: string[] = []
+  if (maxWaitsOnPath(program) > 1) {
+    messages.push('⚠️ Each robot can execute WAIT only once per round.')
+  }
+  validateWaitOrder(program, messages)
+  return Array.from(new Set(messages))
+}
+
 export function getAllowedActionTypes(role: UnitRole) {
   return roleAllowedActions[role]
 }
@@ -319,7 +383,7 @@ export function canInsertNode(
   program: ProgramNode[],
   parentId?: string,
   branch: 'then' | 'else' | 'children' = 'children',
-  actionBudget?: number,
+  _actionBudget?: number,
 ): { allowed: boolean; reason?: string } {
   const stats = getProgramStats(program)
   if (stats.totalNodes >= PROGRAM_LIMITS.maxTotalNodes) {
@@ -336,10 +400,10 @@ export function canInsertNode(
         reason: `Top-level limit reached: max ${PROGRAM_LIMITS.maxRootNodes} blocks.`,
       }
     }
-    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'))) > actionBudget) {
+    if (program.some((node) => node.type === 'WAIT')) {
       return {
         allowed: false,
-        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
+        reason: 'Cannot add actions after WAIT. Remove WAIT first or keep it as the final action.',
       }
     }
     return { allowed: true }
@@ -360,33 +424,28 @@ export function canInsertNode(
 
   if (parent.type === 'REPEAT') {
     if (branch !== 'children') return { allowed: false, reason: 'REPEAT accepts only child blocks.' }
+    if (parent.children.some((node) => node.type === 'WAIT')) {
+      return { allowed: false, reason: 'Cannot add actions after WAIT in this REPEAT block.' }
+    }
     if (parent.children.length >= PROGRAM_LIMITS.maxBranchNodes) {
       return {
         allowed: false,
         reason: `Loop size limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks inside a REPEAT block.`,
       }
     }
-    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'), parentId, branch)) > actionBudget) {
-      return {
-        allowed: false,
-        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
-      }
-    }
     return { allowed: true }
   }
 
   if (parent.type === 'IF') {
-    const targetLength = branch === 'then' ? parent.thenChildren.length : parent.elseChildren.length
+    const targetBranch = branch === 'then' ? parent.thenChildren : parent.elseChildren
+    const targetLength = targetBranch.length
+    if (targetBranch.some((node) => node.type === 'WAIT')) {
+      return { allowed: false, reason: 'Cannot add actions after WAIT in this IF branch.' }
+    }
     if (targetLength >= PROGRAM_LIMITS.maxBranchNodes) {
       return {
         allowed: false,
         reason: `Branch limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks per IF branch.`,
-      }
-    }
-    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'), parentId, branch)) > actionBudget) {
-      return {
-        allowed: false,
-        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
       }
     }
     return { allowed: true }

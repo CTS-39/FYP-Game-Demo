@@ -1,4 +1,5 @@
 import type { GameState } from '../game/types'
+import { terrainNames, tileKey } from '../game/map'
 
 interface ResultsScreenProps {
   game: GameState
@@ -8,11 +9,68 @@ interface ResultsScreenProps {
 export function ResultsScreen({ game, onRestart }: ResultsScreenProps) {
   const human = game.players.human
   const ordered = Object.values(game.players).sort((left, right) => right.score - left.score)
+  const ownerByTile = new Map<string, (typeof game.players)[keyof typeof game.players]>()
+
+  for (const player of Object.values(game.players)) {
+    for (const key of player.territory) ownerByTile.set(key, player)
+  }
+
+  const unitIcon: Record<string, string> = {
+    worker: '🤖',
+    explorer: '🚀',
+    attack: '⚔️',
+    defender: '🛡️',
+  }
+
+  const terrainIcons: Record<string, string> = {
+    plains: '🌾',
+    forest: '🌲',
+    mountain: '⛰️',
+    water: '💧',
+    crystal: '💎',
+    village: '🏡',
+    ruins: '🪄',
+  }
+
+  const buildingIcon: Record<string, string> = {
+    base: '🏠',
+    farm: '🌱',
+    laboratory: '🔬',
+    mine: '⛏️',
+    workshop: '⚙️',
+  }
 
   return (
     <section className="results-screen">
       <h2>🏆 Game Complete</h2>
       <p>{game.winner?.summary}</p>
+      <article className="panel results-map-panel">
+        <h3>Final World Map</h3>
+        <div className="results-map-grid" style={{ gridTemplateColumns: `repeat(${game.map[0].length}, minmax(0, 1fr))` }}>
+          {game.map.flat().map((tile) => {
+            const key = tileKey(tile.x, tile.y)
+            const owner = ownerByTile.get(key)
+            const building = game.buildings.find((entry) => entry.x === tile.x && entry.y === tile.y)
+            const units = game.units.filter((entry) => entry.x === tile.x && entry.y === tile.y)
+
+            return (
+              <div key={key} className="results-map-tile">
+                <div className="results-map-top">
+                  <span>{terrainIcons[tile.terrain]}</span>
+                  {owner ? <span className={`results-owner ${owner.id === 'human' ? 'friendly' : 'enemy'}`}>{owner.id === 'human' ? '🟢' : '🔴'}</span> : null}
+                </div>
+                <p>{terrainNames[tile.terrain]}</p>
+                <div className="results-map-stack">
+                  {building ? <span>{buildingIcon[building.type]}</span> : null}
+                  {units.map((unit) => (
+                    <span key={unit.id}>{unitIcon[unit.role]}</span>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </article>
       <div className="results-grid">
         <article className="panel">
           <h3>{human.name}</h3>

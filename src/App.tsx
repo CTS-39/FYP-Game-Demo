@@ -9,7 +9,12 @@ import { tileKey, terrainNames } from './game/map'
 import { LocalNetworkManager } from './multiplayer/network'
 import type { GameMode, GameState, PlayerId, Tile } from './game/types'
 import './index.css'
-import { collectTips, expandProgram } from './programming/commandSystem'
+import { collectTips, expandProgram, validateProgram } from './programming/commandSystem'
+
+interface UnitValidationIssue {
+  unitName: string
+  message: string
+}
 
 const networkManager = new LocalNetworkManager()
 const VS_AI_SAVE_KEY = 'code-kingdoms-vs-ai-save-v1'
@@ -28,6 +33,35 @@ function loadVsAiGame() {
 function persistVsAiGame(state: GameState) {
   if (state.mode !== 'vs-ai') return
   localStorage.setItem(VS_AI_SAVE_KEY, JSON.stringify(state))
+}
+
+function describeAction(action: ReturnType<typeof expandProgram>[number]) {
+  if (action.type === 'MOVE') {
+    const label = { NORTH: 'UP', SOUTH: 'DOWN', EAST: 'RIGHT', WEST: 'LEFT' }[action.direction ?? 'NORTH']
+    return `MOVE ${label}`
+  }
+  if (action.type === 'BUILD') return `BUILD ${action.buildingType ?? 'farm'}`
+  if (action.type === 'TRAIN') return `TRAIN ${action.recruitRole ?? 'worker'}`
+  if (action.type === 'ATTACK') return 'ATTACK'
+  if (action.type === 'DEFEND') return 'DEFEND'
+  if (action.type === 'UPGRADE') return 'UPGRADE'
+  if (action.type === 'COLLECT') return 'COLLECT'
+  return 'WAIT'
+}
+
+function isWaitOnly(actions: ReturnType<typeof expandProgram>) {
+  return actions.length === 0 || actions.every((action) => action.type === 'WAIT')
+}
+
+function getHumanValidationIssues(game: GameState): UnitValidationIssue[] {
+  return game.units
+    .filter((unit) => unit.playerId === 'human')
+    .map((unit) => {
+      const errors = validateProgram(unit.program, game.players[unit.playerId], unit)
+      if (errors.length === 0) return null
+      return { unitName: unit.name, message: errors[0] }
+    })
+    .filter((entry): entry is UnitValidationIssue => entry !== null)
 }
 
 function App() {
@@ -70,6 +104,12 @@ function App() {
     return `${terrainNames[game.map[y][x].terrain]} tile at (${x + 1}, ${y + 1})`
   }, [game, selectedTile])
 
+  const selectedTileUnits = useMemo(() => {
+    if (!game || !selectedTile) return []
+    const [x, y] = selectedTile.split(',').map(Number)
+    return game.units.filter((unit) => unit.playerId === 'human' && unit.x === x && unit.y === y)
+  }, [game, selectedTile])
+
   const selectedTileActions = useMemo(() => {
     if (!game || !selectedTile) {
       return ['Click any tile to see what actions are possible there.']
@@ -102,7 +142,7 @@ function App() {
     } else {
       actions.push('Movement: robots can move onto this tile if it is not occupied by another unit.')
       if (tile.terrain === 'mountain') {
-        actions.push('Movement cost: mountain travel consumes extra energy.')
+        actions.push('Movement cost: mountain travel consumes +1 extra battery.')
         actions.push('Building: cannot build on mountain tiles.')
       }
     }
@@ -141,6 +181,22 @@ function App() {
     return actions
   }, [game, selectedTile])
 
+  const endTurnActionPreview = useMemo(() => {
+    if (!game) return [] as Array<{ unitName: string; actions: string[] }>
+    const humanUnits = game.units.filter((unit) => unit.playerId === 'human')
+    return humanUnits
+      .map((unit) => {
+        const errors = validateProgram(unit.program, game.players[unit.playerId], unit)
+        if (errors.length > 0) {
+          return { unitName: unit.name, actions: [`INVALID: ${errors[0]}`] }
+        }
+        const expanded = expandProgram(unit.program, unit, game)
+        if (isWaitOnly(expanded)) return null
+        return { unitName: unit.name, actions: expanded.map(describeAction) }
+      })
+      .filter((entry): entry is { unitName: string; actions: string[] } => entry !== null)
+  }, [game])
+
   const handleSelectTile = (tile: Tile) => {
     setSelectedTile(tileKey(tile.x, tile.y))
   }
@@ -168,6 +224,27 @@ function App() {
 
   const handleEndTurn = () => {
     if (!game) return
+
+    const issues = getHumanValidationIssues(game)
+    if (issues.length > 0) {
+      setGame({
+        ...game,
+        report: {
+          headline: '⚠️ Cannot end turn',
+          details: [
+            'Fix invalid robot actions before ending the turn.',
+            ...issues.map((issue) => `${issue.unitName}: ${issue.message}`),
+          ],
+          tips: [],
+        },
+        pendingMessages: [
+          'End Turn blocked: some robot actions are invalid.',
+          ...issues.slice(0, 3).map((issue) => `${issue.unitName}: ${issue.message}`),
+        ],
+      })
+      return
+    }
+
     const next = executeRound(networkManager.submitTurn(game))
     const resolved = next.mode === 'tutorial' ? advanceTutorial(next) : next
     setGame(resolved)
@@ -232,13 +309,16 @@ function App() {
         <Sidebar
           game={game}
           selectedUnit={selectedUnit}
+          selectedTileUnits={selectedTileUnits}
           validationErrors={validationErrors}
           selectedTileLabel={selectedTileLabel}
           selectedTileActions={selectedTileActions}
+          endTurnActionPreview={endTurnActionPreview}
           highlightedAi={highlightedAi}
           onHighlightAi={setHighlightedAi}
           onRunProgram={handleRunProgram}
           onQueueResearch={(tech) => setGame((current) => (current ? queueResearch(current, 'human', tech) : current))}
+          onSelectUnit={(unitId) => setGame((current) => (current ? selectUnit(current, unitId) : current))}
           onUpdateProgram={(program) => {
             if (!selectedUnit) return
             setGame((current) => (current ? updateUnitProgram(current, selectedUnit.id, program) : current))

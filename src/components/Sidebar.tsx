@@ -12,24 +12,29 @@ import {
   cycleCondition,
   cycleDirection,
   cycleRecruitRole,
-  estimateProgramActionCount,
+  estimateBatteryActionCost,
   getAllowedActionTypes,
+  hasWaitAction,
   insertNode,
   moveNode,
   removeNode,
   getProgramStats,
+  validateWaitRules,
   updateNode,
 } from '../programming/commandSystem'
 
 interface SidebarProps {
   game: GameState
   selectedUnit: UnitState | null
+  selectedTileUnits: UnitState[]
   validationErrors: string[]
   selectedTileLabel: string
   selectedTileActions: string[]
+  endTurnActionPreview: Array<{ unitName: string; actions: string[] }>
   highlightedAi: PlayerId | null
   onHighlightAi: (playerId: PlayerId | null) => void
   onRunProgram: () => void
+  onSelectUnit: (unitId: string | null) => void
   onUpdateProgram: (program: ProgramNode[]) => void
   onQueueResearch: (tech: 'conditions' | 'automation') => void
   onEndTurn: () => void
@@ -46,13 +51,18 @@ const actionFactories = {
   WAIT: () => createActionNode('WAIT'),
 } as const
 
-const structuralButtons = [
-  ['REPEAT', () => createRepeatNode()],
-  ['IF', () => createIfNode()],
-] as const
-
 function getActionButtonsForRole(role: UnitState['role']) {
   return getAllowedActionTypes(role).map((type) => [type, actionFactories[type]] as const)
+}
+
+function getStructuralButtonsForRole(role: UnitState['role']) {
+  const roleActions = getAllowedActionTypes(role).filter((type) => type !== 'WAIT')
+  const primaryAction = roleActions[0] ?? 'MOVE'
+  const fallbackAction = roleActions.includes('MOVE') ? 'MOVE' : (roleActions[1] ?? primaryAction)
+  return [
+    ['REPEAT', () => createRepeatNode(primaryAction)],
+    ['IF', () => createIfNode(primaryAction, fallbackAction)],
+  ] as const
 }
 
 const buildCosts: Record<BuildingType, string> = {
@@ -176,12 +186,15 @@ function renderProgram(
 export function Sidebar({
   game,
   selectedUnit,
+  selectedTileUnits,
   validationErrors,
   selectedTileLabel,
   selectedTileActions,
+  endTurnActionPreview,
   highlightedAi,
   onHighlightAi,
   onRunProgram,
+  onSelectUnit,
   onUpdateProgram,
   onQueueResearch,
   onEndTurn,
@@ -193,6 +206,7 @@ export function Sidebar({
   const programStats = selectedUnit ? getProgramStats(selectedUnit.program) : null
   const actionBudget = selectedUnit?.energy ?? 0
   const availableActionButtons = selectedUnit ? getActionButtonsForRole(selectedUnit.role) : []
+  const availableStructuralButtons = selectedUnit ? getStructuralButtonsForRole(selectedUnit.role) : []
 
   useEffect(() => {
     setLimitMessage(null)
@@ -211,8 +225,26 @@ export function Sidebar({
       return
     }
 
-    const candidate = insertNode(selectedUnit.program, factory(), parentId, branch)
-    if (estimateProgramActionCount(candidate) > actionBudget) {
+    const newNode = factory()
+    if (newNode.type === 'WAIT') {
+      if (parentId) {
+        setLimitMessage('WAIT can only be placed at top level and must be the final action.')
+        return
+      }
+      if (hasWaitAction(selectedUnit.program)) {
+        setLimitMessage('Only one WAIT is allowed each round.')
+        return
+      }
+    }
+
+    const candidate = insertNode(selectedUnit.program, newNode, parentId, branch)
+    const waitRuleErrors = validateWaitRules(candidate)
+    if (waitRuleErrors.length > 0) {
+      setLimitMessage(waitRuleErrors[0])
+      return
+    }
+
+    if (estimateBatteryActionCost(candidate) > actionBudget) {
       setLimitMessage(`Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`)
       return
     }
@@ -225,10 +257,10 @@ export function Sidebar({
     <aside className="sidebar">
       <section className="panel resource-panel">
         <h3>
-          Materials{' '}
+          Resources{' '}
           <HelpHint
-            label="Materials help"
-            text="Track your core resources: 🪵 wood for buildings, ⚡ energy for advanced progress, 💎 crystal for research and labs, and 🍎 food for growth. The line below shows the currently selected map tile information."
+            label="Resources help"
+            text="Track your core resources: 🪵 wood for buildings, ⚡ energy for advanced progress, 💎 crystal for research and labs, and 🍎 food for growth. Mountain movement costs +1 extra battery, so route planning matters. The line below shows the currently selected map tile information."
           />
         </h3>
         <div className="resource-row">
@@ -258,6 +290,23 @@ export function Sidebar({
             <p>Battery: {selectedUnit.energy}</p>
             <p>Level: {selectedUnit.level}</p>
             <p>Owner: {game.players[selectedUnit.playerId].name}</p>
+            {selectedTileUnits.length > 1 ? (
+              <div className="unit-selector-box">
+                <p className="muted">Select a robot on this tile to code:</p>
+                <div className="button-row tiny">
+                  {selectedTileUnits.map((unit) => (
+                    <button
+                      key={unit.id}
+                      type="button"
+                      className={selectedUnit.id === unit.id ? 'selected' : ''}
+                      onClick={() => onSelectUnit(unit.id)}
+                    >
+                      {unit.name} ({unit.role})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <p className="muted">
               {selectedUnit.role === 'explorer'
                 ? 'Explorer role: reveal fog quickly; higher levels reduce battery cost and can escape lower-level attackers.'
@@ -285,10 +334,10 @@ export function Sidebar({
           <>
             <ul className="code-tree">{renderProgram(selectedUnit.program, onUpdateProgram, selectedUnit.program, selectedUnit, canInsertHere, handleInsertNode, availableActionButtons)}</ul>
             <p className="muted">
-              Block limits: {programStats?.totalNodes ?? 0}/{PROGRAM_LIMITS.maxTotalNodes} total, {programStats?.rootNodes ?? 0}/{PROGRAM_LIMITS.maxRootNodes} top-level, depth {programStats?.maxDepth ?? 0}/{PROGRAM_LIMITS.maxNestingDepth}, queued actions {estimateProgramActionCount(selectedUnit.program)}/{selectedUnit.energy} (energy).
+              Block limits: {programStats?.totalNodes ?? 0}/{PROGRAM_LIMITS.maxTotalNodes} total, {programStats?.rootNodes ?? 0}/{PROGRAM_LIMITS.maxRootNodes} top-level, depth {programStats?.maxDepth ?? 0}/{PROGRAM_LIMITS.maxNestingDepth}, battery-cost actions {estimateBatteryActionCost(selectedUnit.program)}/{selectedUnit.energy}. WAIT costs 0 battery, can be used once, and must be the final top-level action.
             </p>
             <div className="button-row">
-              {[...availableActionButtons, ...structuralButtons].map(([label, factory]) => (
+              {[...availableActionButtons, ...availableStructuralButtons].map(([label, factory]) => (
                 <button
                   key={label}
                   type="button"
@@ -349,7 +398,7 @@ export function Sidebar({
           🌍 Civilizations{' '}
           <HelpHint
             label="Civilizations help"
-            text="Leaderboard ranking by score. Emblems identify each civilization and the number at right is current total score. Click an AI civilization to inspect its latest reasoning and strategy choices for this round."
+            text="Leaderboard ranking by score. Emblems identify each civilization and the number at right is current total score. Winning conditions: 1) Early elimination by destroying all other players' bases, or 2) highest score when max rounds are complete. Click an AI civilization to inspect its latest reasoning and strategy choices for this round."
           />
         </h3>
         <ol className="leaderboard">
@@ -401,6 +450,20 @@ export function Sidebar({
       <button type="button" className="end-turn" onClick={onEndTurn}>
         End Turn
       </button>
+      <section className="panel end-turn-plan">
+        <h3>📋 This Round Action Plan</h3>
+        {endTurnActionPreview.length === 0 ? (
+          <p className="muted">No robot has non-WAIT actions queued this round.</p>
+        ) : (
+          <ul>
+            {endTurnActionPreview.map((entry) => (
+              <li key={entry.unitName}>
+                <strong>{entry.unitName}:</strong> {entry.actions.join(' -> ')}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </aside>
   )
 }

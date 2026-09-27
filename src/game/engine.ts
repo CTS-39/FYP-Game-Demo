@@ -16,7 +16,7 @@ import type {
   UnitState,
   VictoryState,
 } from './types'
-import { collectTips, createSampleExplorerProgram, createSampleWorkerProgram, expandProgram, summarizeConcepts, validateProgram } from '../programming/commandSystem'
+import { collectTips, expandProgram, summarizeConcepts, validateProgram } from '../programming/commandSystem'
 
 const buildingCosts: Record<BuildingType, Partial<Record<ResourceType, number>>> = {
   base: { wood: 0, energy: 0, crystal: 0, food: 0 },
@@ -97,7 +97,7 @@ function createUnits(): UnitState[] {
       energy: unitEnergyProfile.worker.start,
       trainingsUsed: 0,
       isDefending: false,
-      program: createSampleWorkerProgram(),
+      program: [{ id: `${playerId}-worker-start-wait`, type: 'WAIT' }],
     },
     {
       id: `${playerId}-explorer`,
@@ -110,7 +110,7 @@ function createUnits(): UnitState[] {
       energy: unitEnergyProfile.explorer.start,
       trainingsUsed: 0,
       isDefending: false,
-      program: createSampleExplorerProgram(),
+      program: [{ id: `${playerId}-explorer-start-wait`, type: 'WAIT' }],
     },
   ])
 }
@@ -381,6 +381,12 @@ function findProtectingDefender(state: GameState, target: UnitState) {
   )
 }
 
+function findProtectingDefenderOnTile(state: GameState, playerId: PlayerId, x: number, y: number) {
+  return state.units.find(
+    (entry) => entry.playerId === playerId && entry.role === 'defender' && entry.isDefending && entry.energy > 0 && manhattan(entry, { x, y }) <= 1,
+  )
+}
+
 function defend(state: GameState, unit: UnitState) {
   if (unit.role !== 'defender') return `⚠️ ${unit.name} cannot use DEFEND.`
   if (unit.energy < 1) return `${unit.name} is too low on energy to defend.`
@@ -394,7 +400,8 @@ function attack(state: GameState, unit: UnitState) {
   if (unit.energy < 2) return `${unit.name} is too low on energy to attack.`
 
   const nearbyEnemies = state.units.filter((entry) => entry.playerId !== unit.playerId && manhattan(entry, unit) <= 1)
-  if (nearbyEnemies.length === 0) return `${unit.name} found no nearby enemy to attack.`
+  const nearbyEnemyBases = state.buildings.filter((building) => building.type === 'base' && building.playerId !== unit.playerId && manhattan(building, unit) <= 1)
+  if (nearbyEnemies.length === 0 && nearbyEnemyBases.length === 0) return `${unit.name} found no nearby enemy to attack.`
 
   const priorityOrder: Record<UnitRole, number> = {
     attack: 4,
@@ -404,6 +411,31 @@ function attack(state: GameState, unit: UnitState) {
   }
   nearbyEnemies.sort((left, right) => priorityOrder[right.role] - priorityOrder[left.role])
   const target = nearbyEnemies[0]
+
+  if (!target) {
+    const baseTarget = nearbyEnemyBases[0]
+    const baseDefender = findProtectingDefenderOnTile(state, baseTarget.playerId, baseTarget.x, baseTarget.y)
+    if (baseDefender) {
+      if (unit.level > baseDefender.level) {
+        unit.energy = Math.max(0, unit.energy - 2)
+        state.units = state.units.filter((entry) => entry.id !== baseDefender.id)
+        return `${unit.name} overpowered ${baseDefender.name} while attacking a base.`
+      }
+      if (baseDefender.level > unit.level) {
+        baseDefender.energy = Math.max(0, baseDefender.energy - 1)
+        state.units = state.units.filter((entry) => entry.id !== unit.id)
+        return `${baseDefender.name} countered and destroyed ${unit.name} while defending a base.`
+      }
+      baseDefender.energy = Math.max(0, baseDefender.energy - 1)
+      unit.energy = Math.max(0, unit.energy - 1)
+      return `${baseDefender.name} blocked ${unit.name}'s base attack.`
+    }
+
+    unit.energy = Math.max(0, unit.energy - 2)
+    state.buildings = state.buildings.filter((building) => building.id !== baseTarget.id)
+    const defeatedName = state.players[baseTarget.playerId].name
+    return `${unit.name} destroyed ${defeatedName}'s base.`
+  }
 
   if (target.role === 'explorer' && target.level > unit.level) {
     unit.energy = Math.max(0, unit.energy - 1)
@@ -497,38 +529,22 @@ function refreshAllConcepts(state: GameState) {
 
 function detectVictory(state: GameState): VictoryState | null {
   const players = Object.values(state.players)
-  const expansionWinner = players.find((player) => player.territory.length >= 24)
-  if (expansionWinner) {
+  const activeBaseOwners = new Set(
+    state.buildings
+      .filter((building) => building.type === 'base')
+      .map((building) => building.playerId),
+  )
+
+  if (activeBaseOwners.size === 1) {
+    const winnerId = Array.from(activeBaseOwners)[0]
+    const winner = state.players[winnerId]
     return {
-      winnerId: expansionWinner.id,
+      winnerId,
       type: 'expansion',
-      summary: `${expansionWinner.name} spread across the map and secured an expansion victory.`,
+      summary: `${winner.name} wins by elimination after all rival bases were destroyed.`,
     }
   }
-  const scienceWinner = players.find((player) => player.researched.includes('conditions') && player.researched.includes('automation'))
-  if (scienceWinner) {
-    return {
-      winnerId: scienceWinner.id,
-      type: 'science',
-      summary: `${scienceWinner.name} completed the logic tech path first.`,
-    }
-  }
-  const economicWinner = players.find((player) => Object.values(player.resources).reduce((sum, value) => sum + value, 0) >= 70)
-  if (economicWinner) {
-    return {
-      winnerId: economicWinner.id,
-      type: 'economic',
-      summary: `${economicWinner.name} built the strongest economy.`,
-    }
-  }
-  const programmingWinner = players.find((player) => player.conceptsUsed.includes('Loops') && player.conceptsUsed.includes('Conditions') && player.resources.energy >= 18)
-  if (programmingWinner) {
-    return {
-      winnerId: programmingWinner.id,
-      type: 'programming',
-      summary: `${programmingWinner.name} won by mastering strategic programming.`,
-    }
-  }
+
   if (state.round > state.maxRounds) {
     const sorted = [...players].sort((left, right) => right.score - left.score)
     return {
