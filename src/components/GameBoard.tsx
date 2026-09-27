@@ -1,5 +1,6 @@
 import { terrainNames, terrainPalette, tileKey } from '../game/map'
 import { getTileSummary } from '../game/engine'
+import { HelpHint } from './HelpHint'
 import type { GameState, Tile } from '../game/types'
 
 interface GameBoardProps {
@@ -44,7 +45,13 @@ export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: Ga
     <section className="world-section panel">
       <div className="world-header">
         <div>
-          <strong>{game.report.headline}</strong>
+          <strong>
+            {game.report.headline}{' '}
+            <HelpHint
+              label="Planning and round phase help"
+              text="This header shows the current turn stage. Planning means you are editing programs and research. Execution runs every civilization's actions. Round Complete summarizes what happened and what to do next."
+            />
+          </strong>
           <p>{game.report.details[0]}</p>
         </div>
         <div className="phase-pill">Round {game.round}/{game.maxRounds}</div>

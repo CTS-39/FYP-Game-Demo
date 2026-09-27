@@ -1,5 +1,9 @@
+import { useEffect, useState } from 'react'
 import type { GameState, PlayerId, ProgramNode, UnitState } from '../game/types'
+import { HelpHint } from './HelpHint'
 import {
+  PROGRAM_LIMITS,
+  canInsertNode,
   commandHelp,
   createActionNode,
   createIfNode,
@@ -10,6 +14,7 @@ import {
   insertNode,
   moveNode,
   removeNode,
+  getProgramStats,
   updateNode,
 } from '../programming/commandSystem'
 
@@ -18,6 +23,7 @@ interface SidebarProps {
   selectedUnit: UnitState | null
   validationErrors: string[]
   selectedTileLabel: string
+  selectedTileActions: string[]
   highlightedAi: PlayerId | null
   onHighlightAi: (playerId: PlayerId | null) => void
   onRunProgram: () => void
@@ -39,6 +45,8 @@ function renderProgram(
   nodes: ProgramNode[],
   onUpdateProgram: (program: ProgramNode[]) => void,
   program: ProgramNode[],
+  canInsertHere: (parentId?: string, branch?: 'then' | 'else' | 'children') => boolean,
+  onInsertRequested: (factory: () => ProgramNode, parentId?: string, branch?: 'then' | 'else' | 'children') => void,
   parentId?: string,
   _branch: 'then' | 'else' | 'children' = 'children',
 ) {
@@ -66,10 +74,10 @@ function renderProgram(
       </div>
       {node.type === 'REPEAT' ? (
         <div className="nested-block">
-          <ul>{renderProgram(node.children, onUpdateProgram, program, node.id, 'children')}</ul>
+          <ul>{renderProgram(node.children, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'children')}</ul>
           <div className="button-row tiny">
             {actionButtons.map(([label, factory]) => (
-              <button key={`${node.id}-${label}`} type="button" onClick={() => onUpdateProgram(insertNode(program, factory(), node.id, 'children'))}>
+              <button key={`${node.id}-${label}`} type="button" disabled={!canInsertHere(node.id, 'children')} onClick={() => onInsertRequested(factory, node.id, 'children')}>
                 + {label}
               </button>
             ))}
@@ -80,10 +88,10 @@ function renderProgram(
         <div className="nested-block split">
           <section>
             <p>Then</p>
-            <ul>{renderProgram(node.thenChildren, onUpdateProgram, program, node.id, 'then')}</ul>
+            <ul>{renderProgram(node.thenChildren, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'then')}</ul>
             <div className="button-row tiny">
               {actionButtons.slice(0, 4).map(([label, factory]) => (
-                <button key={`${node.id}-then-${label}`} type="button" onClick={() => onUpdateProgram(insertNode(program, factory(), node.id, 'then'))}>
+                <button key={`${node.id}-then-${label}`} type="button" disabled={!canInsertHere(node.id, 'then')} onClick={() => onInsertRequested(factory, node.id, 'then')}>
                   + {label}
                 </button>
               ))}
@@ -91,10 +99,10 @@ function renderProgram(
           </section>
           <section>
             <p>Else</p>
-            <ul>{renderProgram(node.elseChildren, onUpdateProgram, program, node.id, 'else')}</ul>
+            <ul>{renderProgram(node.elseChildren, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'else')}</ul>
             <div className="button-row tiny">
               {actionButtons.slice(0, 4).map(([label, factory]) => (
-                <button key={`${node.id}-else-${label}`} type="button" onClick={() => onUpdateProgram(insertNode(program, factory(), node.id, 'else'))}>
+                <button key={`${node.id}-else-${label}`} type="button" disabled={!canInsertHere(node.id, 'else')} onClick={() => onInsertRequested(factory, node.id, 'else')}>
                   + {label}
                 </button>
               ))}
@@ -112,6 +120,7 @@ export function Sidebar({
   selectedUnit,
   validationErrors,
   selectedTileLabel,
+  selectedTileActions,
   highlightedAi,
   onHighlightAi,
   onRunProgram,
@@ -119,13 +128,42 @@ export function Sidebar({
   onQueueResearch,
   onEndTurn,
 }: SidebarProps) {
+  const [limitMessage, setLimitMessage] = useState<string | null>(null)
   const leaderboard = Object.values(game.players).sort((left, right) => right.score - left.score)
   const selectedAi = highlightedAi ? game.players[highlightedAi] : null
   const hasConditions = game.players.human.researched.includes('conditions')
+  const programStats = selectedUnit ? getProgramStats(selectedUnit.program) : null
+
+  useEffect(() => {
+    setLimitMessage(null)
+  }, [selectedUnit?.id, selectedUnit?.program])
+
+  const canInsertHere = (parentId?: string, branch: 'then' | 'else' | 'children' = 'children') => {
+    if (!selectedUnit) return false
+    return canInsertNode(selectedUnit.program, parentId, branch).allowed
+  }
+
+  const handleInsertNode = (factory: () => ProgramNode, parentId?: string, branch: 'then' | 'else' | 'children' = 'children') => {
+    if (!selectedUnit) return
+    const check = canInsertNode(selectedUnit.program, parentId, branch)
+    if (!check.allowed) {
+      setLimitMessage(check.reason ?? 'Cannot add more blocks here.')
+      return
+    }
+    setLimitMessage(null)
+    onUpdateProgram(insertNode(selectedUnit.program, factory(), parentId, branch))
+  }
 
   return (
     <aside className="sidebar">
       <section className="panel resource-panel">
+        <h3>
+          Materials{' '}
+          <HelpHint
+            label="Materials help"
+            text="Track your core resources: 🪵 wood for buildings, ⚡ energy for advanced progress, 💎 crystal for research and labs, and 🍎 food for growth. The line below shows the currently selected map tile information."
+          />
+        </h3>
         <div className="resource-row">
           <span>🪵 {game.players.human.resources.wood}</span>
           <span>⚡ {game.players.human.resources.energy}</span>
@@ -133,14 +171,30 @@ export function Sidebar({
           <span>🍎 {game.players.human.resources.food}</span>
         </div>
         <p>{selectedTileLabel}</p>
+        <ul className="tile-action-list">
+          {selectedTileActions.map((action) => (
+            <li key={action}>{action}</li>
+          ))}
+        </ul>
       </section>
 
       <section className="panel">
-        <h3>🤖 {selectedUnit ? `${selectedUnit.name} (${selectedUnit.role})` : 'Select a robot'}</h3>
+        <h3>
+          🤖 {selectedUnit ? `${selectedUnit.name} (${selectedUnit.role})` : 'Select a robot'}{' '}
+          <HelpHint
+            label="Robot panel help"
+            text="This panel shows the selected unit's role, energy, and owner. Worker robots focus on collect/build economy actions. Explorer robots are your scouting unit: they reveal fog faster, find resource landmarks early, and set up safer expansion routes for workers. Select units by clicking a tile that contains your robot."
+          />
+        </h3>
         {selectedUnit ? (
           <>
             <p>Energy: {selectedUnit.energy}</p>
             <p>Owner: {game.players[selectedUnit.playerId].name}</p>
+            <p className="muted">
+              {selectedUnit.role === 'explorer'
+                ? 'Explorer role: reveal fog quickly, scout safe routes, and claim vision around distant tiles.'
+                : 'Worker role: collect resources and build structures to power your economy and research.'}
+            </p>
           </>
         ) : (
           <p>Click a visible tile with one of your robots to program it.</p>
@@ -148,25 +202,42 @@ export function Sidebar({
       </section>
 
       <section className="panel code-panel">
-        <h3>🧠 Code Panel</h3>
+        <h3>
+          🧠 Code Panel{' '}
+          <HelpHint
+            label="Code panel help"
+            text="Create the unit program with blocks: MOVE changes tile, COLLECT gathers resources, BUILD places structures, WAIT recharges, REPEAT loops actions, and IF (after Conditions research) adds branching logic. Use RUN PROGRAM to validate before ending turn."
+          />
+        </h3>
         {selectedUnit ? (
           <>
-            <ul className="code-tree">{renderProgram(selectedUnit.program, onUpdateProgram, selectedUnit.program)}</ul>
+            <ul className="code-tree">{renderProgram(selectedUnit.program, onUpdateProgram, selectedUnit.program, canInsertHere, handleInsertNode)}</ul>
+            <p className="muted">
+              Block limits: {programStats?.totalNodes ?? 0}/{PROGRAM_LIMITS.maxTotalNodes} total, {programStats?.rootNodes ?? 0}/{PROGRAM_LIMITS.maxRootNodes} top-level, depth {programStats?.maxDepth ?? 0}/{PROGRAM_LIMITS.maxNestingDepth}.
+            </p>
             <div className="button-row">
               {actionButtons.map(([label, factory]) => (
                 <button
                   key={label}
                   type="button"
-                  disabled={label === 'IF' && !hasConditions}
-                  onClick={() => onUpdateProgram(insertNode(selectedUnit.program, factory()))}
+                  disabled={(label === 'IF' && !hasConditions) || !canInsertHere()}
+                  onClick={() => handleInsertNode(factory)}
                 >
                   + {label}
                 </button>
               ))}
             </div>
+            {limitMessage ? <div className="error-box"><p>{limitMessage}</p></div> : null}
             <div className="button-row">
               <button type="button" onClick={onRunProgram}>▶ RUN PROGRAM</button>
             </div>
+            {game.pendingMessages.length > 0 ? (
+              <div className="run-feedback-box">
+                {game.pendingMessages.map((message) => (
+                  <p key={message}>{message}</p>
+                ))}
+              </div>
+            ) : null}
             {validationErrors.length > 0 ? (
               <div className="error-box">
                 {validationErrors.map((error) => (
@@ -183,7 +254,13 @@ export function Sidebar({
       </section>
 
       <section className="panel">
-        <h3>🔬 Technology Tree</h3>
+        <h3>
+          🔬 Technology Tree{' '}
+          <HelpHint
+            label="Technology tree help"
+            text="Choose future upgrades here. Basic Logic is your starting tech. Conditions unlocks IF/ELSE decision-making. Automation supports faster strategic growth. Queued research is processed during execution if you can pay the resource cost."
+          />
+        </h3>
         <div className="tech-tree">
           <div className="tech-node unlocked">Basic Logic</div>
           <button type="button" className={game.players.human.researched.includes('conditions') ? 'tech-node unlocked' : 'tech-node'} onClick={() => onQueueResearch('conditions')}>
@@ -196,7 +273,13 @@ export function Sidebar({
       </section>
 
       <section className="panel">
-        <h3>🌍 Civilizations</h3>
+        <h3>
+          🌍 Civilizations{' '}
+          <HelpHint
+            label="Civilizations help"
+            text="Leaderboard ranking by score. Emblems identify each civilization and the number at right is current total score. Click an AI civilization to inspect its latest reasoning and strategy choices for this round."
+          />
+        </h3>
         <ol className="leaderboard">
           {leaderboard.map((player) => (
             <li key={player.id}>
@@ -222,7 +305,13 @@ export function Sidebar({
       </section>
 
       <section className="panel report-panel">
-        <h3>✨ Round Feedback</h3>
+        <h3>
+          ✨ Round Feedback{' '}
+          <HelpHint
+            label="Round feedback help"
+            text="Shows recent execution results: movement outcomes, collection/build events, research updates, and validation messages. Tips below highlight programming improvements based on your current block structure."
+          />
+        </h3>
         <ul>
           {game.report.details.slice(0, 6).map((detail, index) => (
             <li key={`${detail}-${index}`}>{detail}</li>

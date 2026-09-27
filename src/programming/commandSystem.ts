@@ -19,6 +19,13 @@ const directions: Direction[] = ['NORTH', 'EAST', 'SOUTH', 'WEST']
 const buildingTypes: BuildingType[] = ['farm', 'laboratory', 'mine', 'workshop']
 const conditions: ConditionType[] = ['ON_RESOURCE', 'UNEXPLORED_NEARBY', 'HAS_LOW_ENERGY', 'HAS_CRYSTAL']
 
+export const PROGRAM_LIMITS = {
+  maxTotalNodes: 24,
+  maxRootNodes: 10,
+  maxBranchNodes: 6,
+  maxNestingDepth: 3,
+} as const
+
 export const commandHelp: Record<string, string> = {
   MOVE: 'Move your robot one tile.',
   COLLECT: 'Gather the resource on the current tile.',
@@ -85,6 +92,17 @@ export function createSampleExplorerProgram() {
 
 export function validateProgram(program: ProgramNode[], player: PlayerState, unit: UnitState) {
   const messages: string[] = []
+  const stats = getProgramStats(program)
+
+  if (stats.totalNodes > PROGRAM_LIMITS.maxTotalNodes) {
+    messages.push(`⚠️ Program is too large (${stats.totalNodes}/${PROGRAM_LIMITS.maxTotalNodes}). Remove some blocks.`)
+  }
+  if (stats.rootNodes > PROGRAM_LIMITS.maxRootNodes) {
+    messages.push(`⚠️ Too many top-level blocks (${stats.rootNodes}/${PROGRAM_LIMITS.maxRootNodes}).`)
+  }
+  if (stats.maxDepth > PROGRAM_LIMITS.maxNestingDepth) {
+    messages.push(`⚠️ Program nesting is too deep (${stats.maxDepth}/${PROGRAM_LIMITS.maxNestingDepth}).`)
+  }
 
   if (program.length === 0) {
     messages.push(`⚠️ ${unit.name} needs at least one command before the round starts.`)
@@ -93,12 +111,18 @@ export function validateProgram(program: ProgramNode[], player: PlayerState, uni
   const visit = (nodes: ProgramNode[]) => {
     for (const node of nodes) {
       if (node.type === 'REPEAT') {
+        if (node.children.length > PROGRAM_LIMITS.maxBranchNodes) {
+          messages.push(`⚠️ REPEAT blocks can contain at most ${PROGRAM_LIMITS.maxBranchNodes} child blocks.`)
+        }
         if (node.children.length === 0) {
           messages.push("⚠️ Your robot doesn't know what to repeat yet. Add a command inside the REPEAT block.")
         }
         visit(node.children)
       }
       if (node.type === 'IF') {
+        if (node.thenChildren.length > PROGRAM_LIMITS.maxBranchNodes || node.elseChildren.length > PROGRAM_LIMITS.maxBranchNodes) {
+          messages.push(`⚠️ Each IF branch can contain at most ${PROGRAM_LIMITS.maxBranchNodes} blocks.`)
+        }
         if (!player.researched.includes('conditions')) {
           messages.push('⚠️ Research Conditions before using IF / ELSE blocks.')
         }
@@ -189,6 +213,131 @@ export function collectTips(program: ProgramNode[]) {
     tips.push('💡 Conditional logic lets your robot react to the world instead of following only one path.')
   }
   return tips
+}
+
+function findNodeById(nodes: ProgramNode[], nodeId: string): ProgramNode | null {
+  for (const node of nodes) {
+    if (node.id === nodeId) return node
+    if (node.type === 'REPEAT') {
+      const inChildren = findNodeById(node.children, nodeId)
+      if (inChildren) return inChildren
+    }
+    if (node.type === 'IF') {
+      const inThen = findNodeById(node.thenChildren, nodeId)
+      if (inThen) return inThen
+      const inElse = findNodeById(node.elseChildren, nodeId)
+      if (inElse) return inElse
+    }
+  }
+  return null
+}
+
+function countNodes(nodes: ProgramNode[]): number {
+  return nodes.reduce((total, node) => {
+    if (node.type === 'REPEAT') return total + 1 + countNodes(node.children)
+    if (node.type === 'IF') return total + 1 + countNodes(node.thenChildren) + countNodes(node.elseChildren)
+    return total + 1
+  }, 0)
+}
+
+function getMaxDepth(nodes: ProgramNode[], depth = 1): number {
+  let maxDepth = depth
+  for (const node of nodes) {
+    if (node.type === 'REPEAT') {
+      maxDepth = Math.max(maxDepth, getMaxDepth(node.children, depth + 1))
+    }
+    if (node.type === 'IF') {
+      maxDepth = Math.max(maxDepth, getMaxDepth(node.thenChildren, depth + 1))
+      maxDepth = Math.max(maxDepth, getMaxDepth(node.elseChildren, depth + 1))
+    }
+  }
+  return maxDepth
+}
+
+function getNodeDepth(nodes: ProgramNode[], targetNodeId: string, depth = 1): number | null {
+  for (const node of nodes) {
+    if (node.id === targetNodeId) return depth
+    if (node.type === 'REPEAT') {
+      const nestedDepth = getNodeDepth(node.children, targetNodeId, depth + 1)
+      if (nestedDepth !== null) return nestedDepth
+    }
+    if (node.type === 'IF') {
+      const thenDepth = getNodeDepth(node.thenChildren, targetNodeId, depth + 1)
+      if (thenDepth !== null) return thenDepth
+      const elseDepth = getNodeDepth(node.elseChildren, targetNodeId, depth + 1)
+      if (elseDepth !== null) return elseDepth
+    }
+  }
+  return null
+}
+
+export function getProgramStats(program: ProgramNode[]) {
+  return {
+    totalNodes: countNodes(program),
+    rootNodes: program.length,
+    maxDepth: program.length === 0 ? 0 : getMaxDepth(program),
+  }
+}
+
+export function canInsertNode(
+  program: ProgramNode[],
+  parentId?: string,
+  branch: 'then' | 'else' | 'children' = 'children',
+): { allowed: boolean; reason?: string } {
+  const stats = getProgramStats(program)
+  if (stats.totalNodes >= PROGRAM_LIMITS.maxTotalNodes) {
+    return {
+      allowed: false,
+      reason: `Program limit reached: max ${PROGRAM_LIMITS.maxTotalNodes} blocks. Remove a block before adding another.`,
+    }
+  }
+
+  if (!parentId) {
+    if (program.length >= PROGRAM_LIMITS.maxRootNodes) {
+      return {
+        allowed: false,
+        reason: `Top-level limit reached: max ${PROGRAM_LIMITS.maxRootNodes} blocks.`,
+      }
+    }
+    return { allowed: true }
+  }
+
+  const parent = findNodeById(program, parentId)
+  if (!parent) {
+    return { allowed: false, reason: 'Could not find target block for insertion.' }
+  }
+
+  const parentDepth = getNodeDepth(program, parentId)
+  if (parentDepth !== null && parentDepth >= PROGRAM_LIMITS.maxNestingDepth) {
+    return {
+      allowed: false,
+      reason: `Nesting limit reached: max depth is ${PROGRAM_LIMITS.maxNestingDepth}.`,
+    }
+  }
+
+  if (parent.type === 'REPEAT') {
+    if (branch !== 'children') return { allowed: false, reason: 'REPEAT accepts only child blocks.' }
+    if (parent.children.length >= PROGRAM_LIMITS.maxBranchNodes) {
+      return {
+        allowed: false,
+        reason: `Loop size limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks inside a REPEAT block.`,
+      }
+    }
+    return { allowed: true }
+  }
+
+  if (parent.type === 'IF') {
+    const targetLength = branch === 'then' ? parent.thenChildren.length : parent.elseChildren.length
+    if (targetLength >= PROGRAM_LIMITS.maxBranchNodes) {
+      return {
+        allowed: false,
+        reason: `Branch limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks per IF branch.`,
+      }
+    }
+    return { allowed: true }
+  }
+
+  return { allowed: false, reason: 'Only REPEAT and IF blocks can contain nested blocks.' }
 }
 
 export function cycleDirection(direction: Direction | undefined) {
