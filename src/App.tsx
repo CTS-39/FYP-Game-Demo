@@ -85,6 +85,8 @@ function App() {
     const { building, units } = getTileSummary(tile, game)
     const hasWorkerHere = units.some((unit) => unit.playerId === 'human' && unit.role === 'worker')
     const hasExplorerHere = units.some((unit) => unit.playerId === 'human' && unit.role === 'explorer')
+    const hasAttackHere = units.some((unit) => unit.playerId === 'human' && unit.role === 'attack')
+    const hasDefenderHere = units.some((unit) => unit.playerId === 'human' && unit.role === 'defender')
 
     if (!visible) {
       return [
@@ -128,6 +130,12 @@ function App() {
 
     if (hasExplorerHere) {
       actions.push('Explorer usage: good scouting position. Continue revealing fog and identifying future resource routes.')
+    }
+    if (hasAttackHere) {
+      actions.push('Attack usage: queue ATTACK to strike nearby enemy robots.')
+    }
+    if (hasDefenderHere) {
+      actions.push('Defender usage: queue DEFEND to protect nearby allied robots from attacks.')
     }
 
     return actions

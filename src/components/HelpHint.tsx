@@ -18,15 +18,17 @@ export function HelpHint({ label, text }: HelpHintProps) {
     if (!trigger || !tooltip) return
 
     const triggerRect = trigger.getBoundingClientRect()
-    const tooltipRect = tooltip.getBoundingClientRect()
+    const tooltipWidth = tooltip.offsetWidth
+    const tooltipHeight = tooltip.offsetHeight
     const screenPadding = 8
     const gap = 8
 
-    let left = triggerRect.left + triggerRect.width / 2
-    left = Math.max(screenPadding + tooltipRect.width / 2, left)
-    left = Math.min(window.innerWidth - screenPadding - tooltipRect.width / 2, left)
+    const triggerCenterX = triggerRect.left + triggerRect.width / 2
+    let left = triggerCenterX - tooltipWidth / 2
+    left = Math.max(screenPadding, left)
+    left = Math.min(window.innerWidth - tooltipWidth - screenPadding, left)
 
-    let top = triggerRect.top - tooltipRect.height - gap
+    let top = triggerRect.top - tooltipHeight - gap
     if (top < screenPadding) top = screenPadding
 
     setPosition({ left, top })

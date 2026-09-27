@@ -10,6 +10,7 @@ import type {
   ProgramNode,
   RepeatNode,
   ResolvedAction,
+  UnitRole,
   UnitState,
 } from '../game/types'
 
@@ -18,6 +19,7 @@ let nextNodeId = 0
 const directions: Direction[] = ['NORTH', 'EAST', 'SOUTH', 'WEST']
 const buildingTypes: BuildingType[] = ['farm', 'laboratory', 'mine', 'workshop']
 const conditions: ConditionType[] = ['ON_RESOURCE', 'UNEXPLORED_NEARBY', 'HAS_LOW_ENERGY', 'HAS_CRYSTAL']
+const recruitRoles: UnitRole[] = ['worker', 'explorer', 'attack', 'defender']
 
 export const PROGRAM_LIMITS = {
   maxTotalNodes: 24,
@@ -30,9 +32,20 @@ export const commandHelp: Record<string, string> = {
   MOVE: 'Move your robot one tile.',
   COLLECT: 'Gather the resource on the current tile.',
   BUILD: 'Construct a building on a claimed tile.',
+  TRAIN: 'Train a new robot using resources.',
+  UPGRADE: 'Upgrade this robot to improve its role abilities.',
+  ATTACK: 'Attack a nearby enemy robot (attack units only).',
+  DEFEND: 'Guard nearby allies and block incoming attacks (defender units only).',
   WAIT: 'Save energy and skip this step.',
   REPEAT: 'Use a loop to repeat actions.',
   IF: 'Use a condition so a robot can make a choice.',
+}
+
+const roleAllowedActions: Record<UnitRole, ActionNode['type'][]> = {
+  worker: ['MOVE', 'COLLECT', 'BUILD', 'TRAIN', 'UPGRADE', 'WAIT'],
+  explorer: ['MOVE', 'COLLECT', 'BUILD', 'UPGRADE', 'WAIT'],
+  attack: ['MOVE', 'TRAIN', 'UPGRADE', 'ATTACK', 'WAIT'],
+  defender: ['MOVE', 'TRAIN', 'UPGRADE', 'DEFEND', 'WAIT'],
 }
 
 export function createNodeId() {
@@ -46,6 +59,7 @@ export function createActionNode(type: ActionNode['type']): ActionNode {
     type,
     direction: type === 'MOVE' ? 'NORTH' : undefined,
     buildingType: type === 'BUILD' ? 'farm' : undefined,
+    recruitRole: type === 'TRAIN' ? 'worker' : undefined,
   }
 }
 
@@ -93,6 +107,7 @@ export function createSampleExplorerProgram() {
 export function validateProgram(program: ProgramNode[], player: PlayerState, unit: UnitState) {
   const messages: string[] = []
   const stats = getProgramStats(program)
+  const estimatedActions = estimateProgramActionCount(program)
 
   if (stats.totalNodes > PROGRAM_LIMITS.maxTotalNodes) {
     messages.push(`⚠️ Program is too large (${stats.totalNodes}/${PROGRAM_LIMITS.maxTotalNodes}). Remove some blocks.`)
@@ -102,6 +117,9 @@ export function validateProgram(program: ProgramNode[], player: PlayerState, uni
   }
   if (stats.maxDepth > PROGRAM_LIMITS.maxNestingDepth) {
     messages.push(`⚠️ Program nesting is too deep (${stats.maxDepth}/${PROGRAM_LIMITS.maxNestingDepth}).`)
+  }
+  if (estimatedActions > unit.energy) {
+    messages.push(`⚠️ Too many queued actions for current energy (${estimatedActions}/${unit.energy}).`)
   }
 
   if (program.length === 0) {
@@ -132,6 +150,9 @@ export function validateProgram(program: ProgramNode[], player: PlayerState, uni
         visit(node.thenChildren)
         visit(node.elseChildren)
       }
+      if (node.type !== 'REPEAT' && node.type !== 'IF' && !roleAllowedActions[unit.role].includes(node.type)) {
+        messages.push(`⚠️ ${unit.name} (${unit.role}) cannot use ${node.type}.`)
+      }
     }
   }
 
@@ -144,7 +165,6 @@ export function expandProgram(program: ProgramNode[], unit: UnitState, state: Ga
 
   const walk = (nodes: ProgramNode[]) => {
     for (const node of nodes) {
-      if (actions.length >= 8) return
       if (node.type === 'REPEAT') {
         for (let index = 0; index < node.times; index += 1) {
           walk(node.children)
@@ -162,6 +182,7 @@ export function expandProgram(program: ProgramNode[], unit: UnitState, state: Ga
         type: node.type,
         direction: node.direction,
         buildingType: node.buildingType,
+        recruitRole: node.recruitRole,
       })
     }
   }
@@ -213,6 +234,21 @@ export function collectTips(program: ProgramNode[]) {
     tips.push('💡 Conditional logic lets your robot react to the world instead of following only one path.')
   }
   return tips
+}
+
+export function estimateProgramActionCount(program: ProgramNode[]) {
+  const countBranch = (nodes: ProgramNode[]): number =>
+    nodes.reduce((total, node) => {
+      if (node.type === 'REPEAT') return total + node.times * countBranch(node.children)
+      if (node.type === 'IF') return total + Math.max(countBranch(node.thenChildren), countBranch(node.elseChildren))
+      return total + 1
+    }, 0)
+
+  return countBranch(program)
+}
+
+export function getAllowedActionTypes(role: UnitRole) {
+  return roleAllowedActions[role]
 }
 
 function findNodeById(nodes: ProgramNode[], nodeId: string): ProgramNode | null {
@@ -283,6 +319,7 @@ export function canInsertNode(
   program: ProgramNode[],
   parentId?: string,
   branch: 'then' | 'else' | 'children' = 'children',
+  actionBudget?: number,
 ): { allowed: boolean; reason?: string } {
   const stats = getProgramStats(program)
   if (stats.totalNodes >= PROGRAM_LIMITS.maxTotalNodes) {
@@ -297,6 +334,12 @@ export function canInsertNode(
       return {
         allowed: false,
         reason: `Top-level limit reached: max ${PROGRAM_LIMITS.maxRootNodes} blocks.`,
+      }
+    }
+    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'))) > actionBudget) {
+      return {
+        allowed: false,
+        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
       }
     }
     return { allowed: true }
@@ -323,6 +366,12 @@ export function canInsertNode(
         reason: `Loop size limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks inside a REPEAT block.`,
       }
     }
+    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'), parentId, branch)) > actionBudget) {
+      return {
+        allowed: false,
+        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
+      }
+    }
     return { allowed: true }
   }
 
@@ -332,6 +381,12 @@ export function canInsertNode(
       return {
         allowed: false,
         reason: `Branch limit reached: max ${PROGRAM_LIMITS.maxBranchNodes} blocks per IF branch.`,
+      }
+    }
+    if (typeof actionBudget === 'number' && estimateProgramActionCount(insertNode(program, createActionNode('WAIT'), parentId, branch)) > actionBudget) {
+      return {
+        allowed: false,
+        reason: `Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`,
       }
     }
     return { allowed: true }
@@ -353,6 +408,11 @@ export function cycleBuildingType(type: BuildingType | undefined) {
 export function cycleCondition(condition: ConditionType) {
   const current = conditions.indexOf(condition)
   return conditions[(current + 1) % conditions.length]
+}
+
+export function cycleRecruitRole(role: UnitRole | undefined) {
+  const current = recruitRoles.indexOf(role ?? 'worker')
+  return recruitRoles[(current + 1) % recruitRoles.length]
 }
 
 export function insertNode(

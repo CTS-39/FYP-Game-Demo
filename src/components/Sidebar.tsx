@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { GameState, PlayerId, ProgramNode, UnitState } from '../game/types'
+import type { BuildingType, GameState, PlayerId, ProgramNode, UnitRole, UnitState } from '../game/types'
 import { HelpHint } from './HelpHint'
 import {
   PROGRAM_LIMITS,
@@ -11,6 +11,9 @@ import {
   cycleBuildingType,
   cycleCondition,
   cycleDirection,
+  cycleRecruitRole,
+  estimateProgramActionCount,
+  getAllowedActionTypes,
   insertNode,
   moveNode,
   removeNode,
@@ -32,21 +35,68 @@ interface SidebarProps {
   onEndTurn: () => void
 }
 
-const actionButtons = [
-  ['MOVE', () => createActionNode('MOVE')],
-  ['COLLECT', () => createActionNode('COLLECT')],
-  ['BUILD', () => createActionNode('BUILD')],
-  ['WAIT', () => createActionNode('WAIT')],
+const actionFactories = {
+  MOVE: () => createActionNode('MOVE'),
+  COLLECT: () => createActionNode('COLLECT'),
+  BUILD: () => createActionNode('BUILD'),
+  TRAIN: () => createActionNode('TRAIN'),
+  UPGRADE: () => createActionNode('UPGRADE'),
+  ATTACK: () => createActionNode('ATTACK'),
+  DEFEND: () => createActionNode('DEFEND'),
+  WAIT: () => createActionNode('WAIT'),
+} as const
+
+const structuralButtons = [
   ['REPEAT', () => createRepeatNode()],
   ['IF', () => createIfNode()],
 ] as const
+
+function getActionButtonsForRole(role: UnitState['role']) {
+  return getAllowedActionTypes(role).map((type) => [type, actionFactories[type]] as const)
+}
+
+const buildCosts: Record<BuildingType, string> = {
+  base: 'free',
+  farm: '🪵3 🍎1',
+  laboratory: '🪵2 💎3 ⚡2',
+  mine: '🪵2 ⚡1',
+  workshop: '🪵4 ⚡2',
+}
+
+const trainCosts: Record<UnitRole, string> = {
+  worker: '🪵2 ⚡2 💎1 🍎2',
+  explorer: '🪵2 ⚡2 💎1 🍎1',
+  attack: '🪵3 ⚡2 💎2 🍎1',
+  defender: '🪵3 ⚡3 💎1 🍎2',
+}
+
+function getUpgradeCostLabel(role: UnitRole, level: number) {
+  const baseCosts: Record<UnitRole, { wood: number; energy: number; crystal: number; food: number }> = {
+    worker: { wood: 2, energy: 2, crystal: 1, food: 2 },
+    explorer: { wood: 1, energy: 2, crystal: 2, food: 1 },
+    attack: { wood: 2, energy: 2, crystal: 2, food: 1 },
+    defender: { wood: 2, energy: 3, crystal: 1, food: 1 },
+  }
+  const scale = Math.max(0, level - 1)
+  const costs = baseCosts[role]
+  return `🪵${costs.wood + scale} ⚡${costs.energy + scale} 💎${costs.crystal + scale} 🍎${costs.food + scale}`
+}
+
+const directionLabels: Record<string, string> = {
+  NORTH: 'UP',
+  SOUTH: 'DOWN',
+  EAST: 'RIGHT',
+  WEST: 'LEFT',
+}
 
 function renderProgram(
   nodes: ProgramNode[],
   onUpdateProgram: (program: ProgramNode[]) => void,
   program: ProgramNode[],
+  selectedUnit: UnitState,
   canInsertHere: (parentId?: string, branch?: 'then' | 'else' | 'children') => boolean,
   onInsertRequested: (factory: () => ProgramNode, parentId?: string, branch?: 'then' | 'else' | 'children') => void,
+  actionButtons: ReadonlyArray<readonly [string, () => ProgramNode]>,
   parentId?: string,
   _branch: 'then' | 'else' | 'children' = 'children',
 ) {
@@ -55,8 +105,16 @@ function renderProgram(
       <div className="node-row">
         <span>
           <strong>{node.type}</strong>{' '}
-          {node.type === 'MOVE' && <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => ({ ...entry, direction: cycleDirection(entry.type === 'MOVE' ? entry.direction : 'NORTH') })))}>{node.direction}</button>}
-          {node.type === 'BUILD' && <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => ({ ...entry, buildingType: cycleBuildingType(entry.type === 'BUILD' ? entry.buildingType : 'farm') })))}>{node.buildingType}</button>}
+          {node.type === 'MOVE' && <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => ({ ...entry, direction: cycleDirection(entry.type === 'MOVE' ? entry.direction : 'NORTH') })))}>{directionLabels[node.direction ?? 'NORTH']}</button>}
+          {node.type === 'BUILD' && (
+            <>
+              <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => ({ ...entry, buildingType: cycleBuildingType(entry.type === 'BUILD' ? entry.buildingType : 'farm') })))}>{node.buildingType}</button>
+              <span className="node-cost">cost: {buildCosts[node.buildingType ?? 'farm']}</span>
+            </>
+          )}
+          {node.type === 'TRAIN' && <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => ({ ...entry, recruitRole: cycleRecruitRole(entry.type === 'TRAIN' ? entry.recruitRole : 'worker') })))}>{node.recruitRole}</button>}
+          {node.type === 'TRAIN' && <span className="node-cost">cost: {trainCosts[node.recruitRole ?? 'worker']}</span>}
+          {node.type === 'UPGRADE' && <span className="node-cost">cost: {getUpgradeCostLabel(selectedUnit.role, selectedUnit.level)}</span>}
           {node.type === 'REPEAT' && (
             <>
               <button type="button" className="inline" onClick={() => onUpdateProgram(updateNode(program, node.id, (entry) => entry.type === 'REPEAT' ? { ...entry, times: Math.min(5, entry.times + 1) } : entry))}>+</button>
@@ -74,7 +132,7 @@ function renderProgram(
       </div>
       {node.type === 'REPEAT' ? (
         <div className="nested-block">
-          <ul>{renderProgram(node.children, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'children')}</ul>
+          <ul>{renderProgram(node.children, onUpdateProgram, program, selectedUnit, canInsertHere, onInsertRequested, actionButtons, node.id, 'children')}</ul>
           <div className="button-row tiny">
             {actionButtons.map(([label, factory]) => (
               <button key={`${node.id}-${label}`} type="button" disabled={!canInsertHere(node.id, 'children')} onClick={() => onInsertRequested(factory, node.id, 'children')}>
@@ -88,9 +146,9 @@ function renderProgram(
         <div className="nested-block split">
           <section>
             <p>Then</p>
-            <ul>{renderProgram(node.thenChildren, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'then')}</ul>
+            <ul>{renderProgram(node.thenChildren, onUpdateProgram, program, selectedUnit, canInsertHere, onInsertRequested, actionButtons, node.id, 'then')}</ul>
             <div className="button-row tiny">
-              {actionButtons.slice(0, 4).map(([label, factory]) => (
+              {actionButtons.map(([label, factory]) => (
                 <button key={`${node.id}-then-${label}`} type="button" disabled={!canInsertHere(node.id, 'then')} onClick={() => onInsertRequested(factory, node.id, 'then')}>
                   + {label}
                 </button>
@@ -99,9 +157,9 @@ function renderProgram(
           </section>
           <section>
             <p>Else</p>
-            <ul>{renderProgram(node.elseChildren, onUpdateProgram, program, canInsertHere, onInsertRequested, node.id, 'else')}</ul>
+            <ul>{renderProgram(node.elseChildren, onUpdateProgram, program, selectedUnit, canInsertHere, onInsertRequested, actionButtons, node.id, 'else')}</ul>
             <div className="button-row tiny">
-              {actionButtons.slice(0, 4).map(([label, factory]) => (
+              {actionButtons.map(([label, factory]) => (
                 <button key={`${node.id}-else-${label}`} type="button" disabled={!canInsertHere(node.id, 'else')} onClick={() => onInsertRequested(factory, node.id, 'else')}>
                   + {label}
                 </button>
@@ -133,6 +191,8 @@ export function Sidebar({
   const selectedAi = highlightedAi ? game.players[highlightedAi] : null
   const hasConditions = game.players.human.researched.includes('conditions')
   const programStats = selectedUnit ? getProgramStats(selectedUnit.program) : null
+  const actionBudget = selectedUnit?.energy ?? 0
+  const availableActionButtons = selectedUnit ? getActionButtonsForRole(selectedUnit.role) : []
 
   useEffect(() => {
     setLimitMessage(null)
@@ -140,18 +200,25 @@ export function Sidebar({
 
   const canInsertHere = (parentId?: string, branch: 'then' | 'else' | 'children' = 'children') => {
     if (!selectedUnit) return false
-    return canInsertNode(selectedUnit.program, parentId, branch).allowed
+    return canInsertNode(selectedUnit.program, parentId, branch, actionBudget).allowed
   }
 
   const handleInsertNode = (factory: () => ProgramNode, parentId?: string, branch: 'then' | 'else' | 'children' = 'children') => {
     if (!selectedUnit) return
-    const check = canInsertNode(selectedUnit.program, parentId, branch)
+    const check = canInsertNode(selectedUnit.program, parentId, branch, actionBudget)
     if (!check.allowed) {
       setLimitMessage(check.reason ?? 'Cannot add more blocks here.')
       return
     }
+
+    const candidate = insertNode(selectedUnit.program, factory(), parentId, branch)
+    if (estimateProgramActionCount(candidate) > actionBudget) {
+      setLimitMessage(`Action budget reached by energy: max ${actionBudget} queued actions for this robot right now.`)
+      return
+    }
+
     setLimitMessage(null)
-    onUpdateProgram(insertNode(selectedUnit.program, factory(), parentId, branch))
+    onUpdateProgram(candidate)
   }
 
   return (
@@ -188,12 +255,17 @@ export function Sidebar({
         </h3>
         {selectedUnit ? (
           <>
-            <p>Energy: {selectedUnit.energy}</p>
+            <p>Battery: {selectedUnit.energy}</p>
+            <p>Level: {selectedUnit.level}</p>
             <p>Owner: {game.players[selectedUnit.playerId].name}</p>
             <p className="muted">
               {selectedUnit.role === 'explorer'
-                ? 'Explorer role: reveal fog quickly, scout safe routes, and claim vision around distant tiles.'
-                : 'Worker role: collect resources and build structures to power your economy and research.'}
+                ? 'Explorer role: reveal fog quickly; higher levels reduce battery cost and can escape lower-level attackers.'
+                : selectedUnit.role === 'attack'
+                  ? 'Attack role: uses ATTACK to destroy nearby enemies; higher level wins against weaker defenders.'
+                  : selectedUnit.role === 'defender'
+                    ? 'Defender role: uses DEFEND to guard nearby allies; higher level can counter weaker attackers.'
+                : 'Worker role: collect/build/train; higher levels recover battery faster each round.'}
             </p>
           </>
         ) : (
@@ -206,17 +278,17 @@ export function Sidebar({
           🧠 Code Panel{' '}
           <HelpHint
             label="Code panel help"
-            text="Create the unit program with blocks: MOVE changes tile, COLLECT gathers resources, BUILD places structures, WAIT recharges, REPEAT loops actions, and IF (after Conditions research) adds branching logic. Use RUN PROGRAM to validate before ending turn."
+            text="Each robot has role-specific actions plus common MOVE, UPGRADE, WAIT, and REPEAT. Worker: BUILD/COLLECT/TRAIN. Explorer: BUILD/COLLECT. Attack: ATTACK/TRAIN. Defender: DEFEND/TRAIN. TRAIN can create Worker, Explorer, Attack, or Defender units. UPGRADE uses resources to improve level effects. Queued action count cannot exceed current battery."
           />
         </h3>
         {selectedUnit ? (
           <>
-            <ul className="code-tree">{renderProgram(selectedUnit.program, onUpdateProgram, selectedUnit.program, canInsertHere, handleInsertNode)}</ul>
+            <ul className="code-tree">{renderProgram(selectedUnit.program, onUpdateProgram, selectedUnit.program, selectedUnit, canInsertHere, handleInsertNode, availableActionButtons)}</ul>
             <p className="muted">
-              Block limits: {programStats?.totalNodes ?? 0}/{PROGRAM_LIMITS.maxTotalNodes} total, {programStats?.rootNodes ?? 0}/{PROGRAM_LIMITS.maxRootNodes} top-level, depth {programStats?.maxDepth ?? 0}/{PROGRAM_LIMITS.maxNestingDepth}.
+              Block limits: {programStats?.totalNodes ?? 0}/{PROGRAM_LIMITS.maxTotalNodes} total, {programStats?.rootNodes ?? 0}/{PROGRAM_LIMITS.maxRootNodes} top-level, depth {programStats?.maxDepth ?? 0}/{PROGRAM_LIMITS.maxNestingDepth}, queued actions {estimateProgramActionCount(selectedUnit.program)}/{selectedUnit.energy} (energy).
             </p>
             <div className="button-row">
-              {actionButtons.map(([label, factory]) => (
+              {[...availableActionButtons, ...structuralButtons].map(([label, factory]) => (
                 <button
                   key={label}
                   type="button"

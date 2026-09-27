@@ -12,6 +12,7 @@ import type {
   RoundReport,
   TechType,
   Tile,
+  UnitRole,
   UnitState,
   VictoryState,
 } from './types'
@@ -29,6 +30,29 @@ const techCosts: Record<TechType, Partial<Record<ResourceType, number>>> = {
   'basic-logic': {},
   conditions: { crystal: 3, energy: 3 },
   automation: { wood: 4, crystal: 4, energy: 4 },
+}
+
+const recruitCosts: Record<UnitRole, Partial<Record<ResourceType, number>>> = {
+  worker: { wood: 2, energy: 2, crystal: 1, food: 2 },
+  explorer: { wood: 2, energy: 2, crystal: 1, food: 1 },
+  attack: { wood: 3, energy: 2, crystal: 2, food: 1 },
+  defender: { wood: 3, energy: 3, crystal: 1, food: 2 },
+}
+
+const maxUnitLevel = 3
+
+const upgradeBaseCosts: Record<UnitRole, Partial<Record<ResourceType, number>>> = {
+  worker: { wood: 2, energy: 2, crystal: 1, food: 2 },
+  explorer: { wood: 1, energy: 2, crystal: 2, food: 1 },
+  attack: { wood: 2, energy: 2, crystal: 2, food: 1 },
+  defender: { wood: 2, energy: 3, crystal: 1, food: 1 },
+}
+
+const unitEnergyProfile: Record<UnitRole, { start: number; max: number; trainLimit: number }> = {
+  worker: { start: 7, max: 8, trainLimit: 4 },
+  explorer: { start: 5, max: 6, trainLimit: 3 },
+  attack: { start: 4, max: 5, trainLimit: 2 },
+  defender: { start: 6, max: 7, trainLimit: 2 },
 }
 
 const buildingYields: Record<BuildingType, Partial<Record<ResourceType, number>>> = {
@@ -67,9 +91,12 @@ function createUnits(): UnitState[] {
       playerId: playerId as PlayerId,
       name: 'Worker Robot',
       role: 'worker' as const,
+      level: 1,
       x: position.x,
       y: position.y,
-      energy: 5,
+      energy: unitEnergyProfile.worker.start,
+      trainingsUsed: 0,
+      isDefending: false,
       program: createSampleWorkerProgram(),
     },
     {
@@ -77,9 +104,12 @@ function createUnits(): UnitState[] {
       playerId: playerId as PlayerId,
       name: 'Explorer Robot',
       role: 'explorer' as const,
+      level: 1,
       x: Math.max(0, position.x - (position.x > 5 ? 1 : -1)),
       y: position.y,
-      energy: 5,
+      energy: unitEnergyProfile.explorer.start,
+      trainingsUsed: 0,
+      isDefending: false,
       program: createSampleExplorerProgram(),
     },
   ])
@@ -111,7 +141,7 @@ export function createInitialState(mode: GameMode): GameState {
     mode,
     phase: 'planning',
     round: 1,
-    maxRounds: 12,
+    maxRounds: mode === 'vs-ai' ? 18 : 12,
     map: createMap(),
     players,
     units: createUnits(),
@@ -181,6 +211,12 @@ function refreshVision(state: GameState) {
 }
 
 function moveUnit(state: GameState, unit: UnitState, direction: import('./types').Direction) {
+  const directionLabel = {
+    NORTH: 'up',
+    SOUTH: 'down',
+    EAST: 'right',
+    WEST: 'left',
+  }[direction]
   const delta = {
     NORTH: { x: 0, y: -1 },
     SOUTH: { x: 0, y: 1 },
@@ -191,20 +227,28 @@ function moveUnit(state: GameState, unit: UnitState, direction: import('./types'
   const nextY = unit.y + delta.y
   const tile = getTile(state.map, nextX, nextY)
   if (!tile || tile.terrain === 'water') return `${unit.name} could not cross the river.`
+  const explorerDiscount = unit.role === 'explorer' ? Math.max(0, unit.level - 1) : 0
+  const energyCost = Math.max(0, (tile.terrain === 'mountain' ? 2 : 1) - explorerDiscount)
+  if (unit.energy < energyCost) {
+    return `${unit.name} is too low on energy to move ${directionLabel}.`
+  }
   if (state.units.some((other) => other.id !== unit.id && other.x === nextX && other.y === nextY)) {
     return `${unit.name} was blocked by another robot.`
   }
   unit.x = nextX
   unit.y = nextY
-  unit.energy = Math.max(0, unit.energy - (tile.terrain === 'mountain' ? 2 : 1))
+  unit.energy = Math.max(0, unit.energy - energyCost)
   claimTile(state, unit.playerId, nextX, nextY)
   revealAround(state, unit.playerId, nextX, nextY, unit.role === 'explorer' ? 2 : 1)
-  return `${unit.name} moved ${direction.toLowerCase()}.`
+  return `${unit.name} moved ${directionLabel}.`
 }
 
 function collectAtTile(state: GameState, unit: UnitState) {
+  const energyCost = unit.role === 'explorer' ? Math.max(0, 1 - Math.max(0, unit.level - 1)) : 1
+  if (unit.energy < energyCost) return `${unit.name} is too low on energy to collect.`
   const tile = getTile(state.map, unit.x, unit.y)
   if (!tile?.resource || tile.amount <= 0) return `${unit.name} found nothing to collect here.`
+  unit.energy = Math.max(0, unit.energy - energyCost)
   tile.amount -= 1
   gain(state.players[unit.playerId], tile.resource, 2)
   if (tile.landmark === 'ruins') {
@@ -217,6 +261,10 @@ function collectAtTile(state: GameState, unit: UnitState) {
 }
 
 function buildOnTile(state: GameState, unit: UnitState, type: BuildingType) {
+  const energyCost = unit.role === 'explorer' ? Math.max(0, 2 - Math.max(0, unit.level - 1)) : 2
+  if (unit.energy < energyCost) {
+    return `⚠️ ${unit.name} needs at least 2 energy to build ${type}.`
+  }
   const player = state.players[unit.playerId]
   const tile = getTile(state.map, unit.x, unit.y)
   if (!tile || tile.terrain === 'water' || tile.terrain === 'mountain') {
@@ -233,6 +281,7 @@ function buildOnTile(state: GameState, unit: UnitState, type: BuildingType) {
     return `⚠️ ${player.name} does not have enough resources to build ${type}.`
   }
   spend(player, cost)
+  unit.energy = Math.max(0, unit.energy - energyCost)
   state.buildings.push({
     id: `${unit.playerId}-${type}-${state.round}-${state.buildings.length}`,
     playerId: unit.playerId,
@@ -241,6 +290,157 @@ function buildOnTile(state: GameState, unit: UnitState, type: BuildingType) {
     y: unit.y,
   })
   return `${unit.name} built a ${type}.`
+}
+
+function createUnitName(role: UnitRole) {
+  if (role === 'worker') return 'Worker Robot'
+  if (role === 'explorer') return 'Explorer Robot'
+  if (role === 'attack') return 'Attack Robot'
+  return 'Defender Robot'
+}
+
+function getUpgradeCost(unit: UnitState): Partial<Record<ResourceType, number>> {
+  const base = upgradeBaseCosts[unit.role]
+  const multiplier = unit.level
+  return {
+    wood: (base.wood ?? 0) + (multiplier - 1),
+    energy: (base.energy ?? 0) + (multiplier - 1),
+    crystal: (base.crystal ?? 0) + (multiplier - 1),
+    food: (base.food ?? 0) + (multiplier - 1),
+  }
+}
+
+function upgradeUnit(state: GameState, unit: UnitState) {
+  if (unit.level >= maxUnitLevel) {
+    return `⚠️ ${unit.name} is already at max level.`
+  }
+  if (unit.energy < 1) {
+    return `⚠️ ${unit.name} needs at least 1 energy to upgrade.`
+  }
+  const player = state.players[unit.playerId]
+  const cost = getUpgradeCost(unit)
+  if (!canAfford(player, cost)) {
+    return `⚠️ ${player.name} lacks resources to upgrade ${unit.name}.`
+  }
+  spend(player, cost)
+  unit.energy = Math.max(0, unit.energy - 1)
+  unit.level += 1
+  return `${unit.name} upgraded to level ${unit.level}.`
+}
+
+function trainUnit(state: GameState, unit: UnitState, recruitRole: UnitRole) {
+  if (!['worker', 'explorer', 'attack', 'defender'].includes(unit.role)) {
+    return `⚠️ ${unit.name} cannot train units.`
+  }
+  if (unit.trainingsUsed >= unitEnergyProfile[unit.role].trainLimit) {
+    return `⚠️ ${unit.name} reached its training limit (${unitEnergyProfile[unit.role].trainLimit}).`
+  }
+  if (unit.energy < 2) {
+    return `⚠️ ${unit.name} needs at least 2 energy to train a ${createUnitName(recruitRole)}.`
+  }
+  const player = state.players[unit.playerId]
+  const cost = recruitCosts[recruitRole]
+  if (!canAfford(player, cost)) {
+    return `⚠️ ${player.name} does not have enough resources to train a ${createUnitName(recruitRole)}.`
+  }
+  const sameTileUnits = state.units.filter((entry) => entry.playerId === unit.playerId && entry.x === unit.x && entry.y === unit.y)
+  if (sameTileUnits.length >= 3) {
+    return `⚠️ Tile is too crowded to train another robot here.`
+  }
+
+  spend(player, cost)
+  unit.energy = Math.max(0, unit.energy - 2)
+  unit.trainingsUsed += 1
+
+  const id = `${unit.playerId}-${recruitRole}-${state.round}-${state.units.length}`
+  const profile = unitEnergyProfile[recruitRole]
+  state.units.push({
+    id,
+    playerId: unit.playerId,
+    name: createUnitName(recruitRole),
+    role: recruitRole,
+    level: 1,
+    x: unit.x,
+    y: unit.y,
+    energy: profile.start,
+    trainingsUsed: 0,
+    isDefending: false,
+    program: [{ id: `seed-${id}`, type: 'WAIT' }],
+  })
+
+  return `${unit.name} trained a ${createUnitName(recruitRole)}.`
+}
+
+function manhattan(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+}
+
+function findProtectingDefender(state: GameState, target: UnitState) {
+  return state.units.find(
+    (entry) => entry.playerId === target.playerId && entry.role === 'defender' && entry.isDefending && entry.energy > 0 && manhattan(entry, target) <= 1,
+  )
+}
+
+function defend(state: GameState, unit: UnitState) {
+  if (unit.role !== 'defender') return `⚠️ ${unit.name} cannot use DEFEND.`
+  if (unit.energy < 1) return `${unit.name} is too low on energy to defend.`
+  unit.energy = Math.max(0, unit.energy - 1)
+  unit.isDefending = true
+  return `${unit.name} is defending nearby allies.`
+}
+
+function attack(state: GameState, unit: UnitState) {
+  if (unit.role !== 'attack') return `⚠️ ${unit.name} cannot use ATTACK.`
+  if (unit.energy < 2) return `${unit.name} is too low on energy to attack.`
+
+  const nearbyEnemies = state.units.filter((entry) => entry.playerId !== unit.playerId && manhattan(entry, unit) <= 1)
+  if (nearbyEnemies.length === 0) return `${unit.name} found no nearby enemy to attack.`
+
+  const priorityOrder: Record<UnitRole, number> = {
+    attack: 4,
+    worker: 3,
+    explorer: 2,
+    defender: 1,
+  }
+  nearbyEnemies.sort((left, right) => priorityOrder[right.role] - priorityOrder[left.role])
+  const target = nearbyEnemies[0]
+
+  if (target.role === 'explorer' && target.level > unit.level) {
+    unit.energy = Math.max(0, unit.energy - 1)
+    return `${target.name} escaped ${unit.name}'s attack thanks to higher level mobility.`
+  }
+
+  const defender = findProtectingDefender(state, target)
+  if (defender && defender.id !== target.id) {
+    if (unit.level > defender.level) {
+      unit.energy = Math.max(0, unit.energy - 2)
+      state.units = state.units.filter((entry) => entry.id !== defender.id)
+      return `${unit.name} overpowered and destroyed ${defender.name}.`
+    }
+    if (defender.level > unit.level) {
+      defender.energy = Math.max(0, defender.energy - 1)
+      state.units = state.units.filter((entry) => entry.id !== unit.id)
+      return `${defender.name} countered and destroyed ${unit.name}.`
+    }
+    defender.energy = Math.max(0, defender.energy - 1)
+    unit.energy = Math.max(0, unit.energy - 1)
+    return `${defender.name} blocked ${unit.name}; same level stalemate.`
+  }
+
+  if (target.role === 'attack') {
+    if (unit.level === target.level) {
+      state.units = state.units.filter((entry) => entry.id !== unit.id && entry.id !== target.id)
+      return `${unit.name} and ${target.name} destroyed each other in equal-level combat.`
+    }
+    if (unit.level < target.level) {
+      state.units = state.units.filter((entry) => entry.id !== unit.id)
+      return `${target.name} repelled and destroyed ${unit.name}.`
+    }
+  }
+
+  unit.energy = Math.max(0, unit.energy - 2)
+  state.units = state.units.filter((entry) => entry.id !== target.id)
+  return `${unit.name} destroyed ${target.name}.`
 }
 
 function applyResearch(state: GameState, playerId: PlayerId, details: string[]) {
@@ -377,6 +577,9 @@ export function advanceTutorial(state: GameState) {
 export function executeRound(current: GameState) {
   const state = clone(current)
   state.phase = 'execution'
+  for (const unit of state.units) {
+    unit.isDefending = false
+  }
   const report: RoundReport = {
     headline: '⚙️ Execution Phase',
     details: [],
@@ -397,7 +600,10 @@ export function executeRound(current: GameState) {
     }
   }
 
-  for (const unit of state.units) {
+  const unitOrder = state.units.map((unit) => unit.id)
+  for (const unitId of unitOrder) {
+    const unit = state.units.find((entry) => entry.id === unitId)
+    if (!unit) continue
     const errors = validateProgram(unit.program, state.players[unit.playerId], unit)
     if (errors.length > 0) {
       report.details.push(errors[0])
@@ -411,9 +617,14 @@ export function executeRound(current: GameState) {
       if (action.type === 'MOVE' && action.direction) report.details.push(moveUnit(state, unit, action.direction))
       if (action.type === 'COLLECT') report.details.push(collectAtTile(state, unit))
       if (action.type === 'BUILD' && action.buildingType) report.details.push(buildOnTile(state, unit, action.buildingType))
+      if (action.type === 'TRAIN' && action.recruitRole) report.details.push(trainUnit(state, unit, action.recruitRole))
+      if (action.type === 'UPGRADE') report.details.push(upgradeUnit(state, unit))
+      if (action.type === 'ATTACK') report.details.push(attack(state, unit))
+      if (action.type === 'DEFEND') report.details.push(defend(state, unit))
       if (action.type === 'WAIT') report.details.push(`${unit.name} waited to recharge.`)
     }
-    unit.energy = Math.min(6, unit.energy + 1)
+    const rechargeBoost = unit.role === 'worker' ? Math.max(0, unit.level - 1) : 0
+    unit.energy = Math.min(unitEnergyProfile[unit.role].max, unit.energy + 1 + rechargeBoost)
   }
 
   for (const playerId of Object.keys(state.players) as PlayerId[]) {

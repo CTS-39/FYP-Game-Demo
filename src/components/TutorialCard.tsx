@@ -40,62 +40,106 @@ export function TutorialCard({ step }: TutorialCardProps) {
       </p>
       <p>{current.goal}</p>
 
-      <div className="tutorial-section">
-        <strong>Game Buttons</strong>
-        <ul>
-          <li>▶ RUN PROGRAM: checks your selected robot code and shows mistakes before execution.</li>
-          <li>End Turn: runs all robots, AI decisions, resource income, and research for the round.</li>
-          <li>Technology Tree buttons: queue Conditions or Automation to unlock stronger strategies.</li>
-        </ul>
-      </div>
+      <div className="tutorial-accordion">
+        <details className="tutorial-topic" open>
+          <summary>Quick Start Flow</summary>
+          <ul>
+            <li>Select a robot on the map to open its programmable actions in the Code Panel.</li>
+            <li>Build a short battery-safe program first, then press RUN PROGRAM to validate it.</li>
+            <li>End Turn to execute every civilization: your actions, AI actions, research, income, and combat resolution.</li>
+            <li>Read Round Feedback to understand what succeeded, what failed, and what to improve next turn.</li>
+          </ul>
+        </details>
 
-      <div className="tutorial-section">
-        <strong>Map Tiles and Icons</strong>
-        <ul>
-          <li>🌾 Plains: basic expansion land; usually good for growth and safe worker routes.</li>
-          <li>🌲 Forest: strong wood source for construction-heavy strategies.</li>
-          <li>⛰️ Mountain: crystal-rich but costly to cross; cannot build structures on mountains.</li>
-          <li>💧 Water (River): blocks land movement; use it to predict chokepoints and paths.</li>
-          <li>💎 Crystal Grove: premium crystal collection zone for faster tech progression.</li>
-          <li>🏡 Village: energy-focused landmark with bonus food value while collecting nearby.</li>
-          <li>🪄 Ruins: energy-focused landmark ideal for scouting and early momentum.</li>
-          <li>🏠 Base: core starter structure; anchors early territory and baseline production.</li>
-          <li>🌱 Farm: boosts food income to support steady economy and expansion pace.</li>
-          <li>🔬 Laboratory: supports science progression and crystal/energy-oriented plans.</li>
-          <li>⛏️ Mine: increases crystal income to unlock advanced technologies sooner.</li>
-          <li>⚙️ Workshop: improves production flexibility with extra wood and energy output.</li>
-          <li>Unit icons: 🤖 worker, 🚀 explorer. Colored dots show tile ownership.</li>
-          <li>❔ means fog of war: explore with units to reveal that area.</li>
-        </ul>
-      </div>
+        <details className="tutorial-topic" open>
+          <summary>Interface and Button Functions</summary>
+          <ul>
+            <li>Materials panel: shows global resources (wood, energy, crystal, food), selected-tile info, and tile-specific possible actions.</li>
+            <li>Robot panel: shows selected robot type, battery, level, owner, and role purpose.</li>
+            <li>Code Panel: where you compose action logic with MOVE/BUILD/TRAIN/UPGRADE and control logic (REPEAT, IF/ELSE).</li>
+            <li>RUN PROGRAM: checks role restrictions, action limits, and battery budget before execution.</li>
+            <li>Technology Tree: queue Conditions or Automation to unlock better strategic programming options.</li>
+            <li>Civilizations: score ranking and AI reasoning snapshots for opponent behavior insight.</li>
+            <li>End Turn: commits your plan and advances the simulation by one full round.</li>
+          </ul>
+        </details>
 
-      <div className="tutorial-section">
-        <strong>Unit Roles</strong>
-        <ul>
-          <li>🤖 Worker: your economy unit. Use it to COLLECT resources and BUILD structures.</li>
-          <li>🚀 Explorer: your scouting unit. Use it to reveal fog faster, discover villages/ruins, and map safe paths.</li>
-          <li>Best flow: send Explorer first, then move Worker into revealed resource-rich tiles.</li>
-        </ul>
-      </div>
+        <details className="tutorial-topic">
+          <summary>Map Tiles, Buildings, and Icons</summary>
+          <ul>
+            <li>🌾 Plains: low-risk movement and common expansion space.</li>
+            <li>🌲 Forest: reliable wood source, useful for training/building-heavy plans.</li>
+            <li>⛰️ Mountain: crystal-adjacent routes with higher movement battery cost; cannot host buildings.</li>
+            <li>💧 Water: hard movement barrier, creates natural chokepoints and defensive lines.</li>
+            <li>💎 Crystal Grove: key science/economy area for upgrade and research pressure.</li>
+            <li>🏡 Village and 🪄 Ruins: landmark tiles that improve collection value and momentum.</li>
+            <li>🏠 Base: initial foothold and territory anchor.</li>
+            <li>🌱 Farm: boosts food economy.</li>
+            <li>🔬 Laboratory: strengthens energy/crystal science flow.</li>
+            <li>⛏️ Mine: crystal-focused production.</li>
+            <li>⚙️ Workshop: mixed production support (wood + energy).</li>
+            <li>Unit icons: 🤖 worker, 🚀 explorer, ⚔️ attack, 🛡️ defender. Colored dots indicate ownership.</li>
+            <li>❔ Fog icon: hidden area; send explorers to reveal and plan safely.</li>
+          </ul>
+        </details>
 
-      <div className="tutorial-section">
-        <strong>Game Process</strong>
-        <ul>
-          <li>1. Planning: edit robot programs and queue research.</li>
-          <li>2. Execution: all players run their programmed actions.</li>
-          <li>3. Results: check round feedback, score changes, and AI reasoning.</li>
-        </ul>
-      </div>
+        <details className="tutorial-topic">
+          <summary>Robot Roles, Actions, and Limits</summary>
+          <ul>
+            <li>Common actions for all roles: MOVE, UPGRADE, WAIT, REPEAT.</li>
+            <li>Worker unique actions: BUILD, TRAIN, COLLECT.</li>
+            <li>Explorer unique actions: BUILD, COLLECT.</li>
+            <li>Attack unique actions: TRAIN, ATTACK.</li>
+            <li>Defender unique actions: TRAIN, DEFEND.</li>
+            <li>Training limits differ by robot type, so decide who should be your main producer role each match phase.</li>
+            <li>Program action count must not exceed current battery budget; short efficient programs are often stronger.</li>
+          </ul>
+        </details>
 
-      <div className="tutorial-section">
-        <strong>Win Conditions</strong>
-        <ul>
-          <li>Expansion: control at least 24 tiles.</li>
-          <li>Science: research both Conditions and Automation.</li>
-          <li>Economic: reach a total of 70 resources.</li>
-          <li>Programming: use loops and conditions while maintaining high energy.</li>
-          <li>Score: highest score when max rounds are complete.</li>
-        </ul>
+        <details className="tutorial-topic">
+          <summary>Upgrade System and Level Effects</summary>
+          <ul>
+            <li>UPGRADE consumes resources and increases robot level (up to max level).</li>
+            <li>Attack: higher level improves outcomes against defenders and attackers.</li>
+            <li>Defender: higher level can counter weaker attackers and protect allies more reliably.</li>
+            <li>Explorer: higher level lowers battery cost for utility actions and can escape lower-level attackers.</li>
+            <li>Worker: higher level improves battery recovery speed each round, enabling heavier workloads.</li>
+            <li>Upgrade costs scale with level, so timing upgrades around your economy curve matters.</li>
+          </ul>
+        </details>
+
+        <details className="tutorial-topic">
+          <summary>Programming Concepts and Usage</summary>
+          <ul>
+            <li>Sequence: base concept, actions run in order from top to bottom.</li>
+            <li>REPEAT: compresses repeated behavior and saves block space for strategic complexity.</li>
+            <li>IF/ELSE: enables reactive behavior based on map/resource/battery conditions.</li>
+            <li>Best practice: put low-cost scouting/economy steps first, then costly combat/build decisions.</li>
+            <li>Use WAIT intentionally when preserving battery for next round gives stronger tempo.</li>
+          </ul>
+        </details>
+
+        <details className="tutorial-topic">
+          <summary>Round Cycle, Combat, and Defense Logic</summary>
+          <ul>
+            <li>Planning phase: edit programs, queue research, prepare positioning.</li>
+            <li>Execution phase: every unit performs validated actions; combat interactions resolve from those actions.</li>
+            <li>DEFEND establishes protection states; ATTACK checks nearby targets and compares level interactions.</li>
+            <li>Economy tick and recharge occur after action processing, then score/victory checks update.</li>
+          </ul>
+        </details>
+
+        <details className="tutorial-topic">
+          <summary>Win Conditions and Strategy Priorities</summary>
+          <ul>
+            <li>Expansion victory: control enough territory tiles.</li>
+            <li>Science victory: complete required research path.</li>
+            <li>Economic victory: hit resource threshold.</li>
+            <li>Programming victory: demonstrate advanced logic patterns with strong energy posture.</li>
+            <li>Score victory: lead by total score at max rounds.</li>
+            <li>Balanced strategy usually wins: scout early, stabilize economy, then transition into levelled combat pressure.</li>
+          </ul>
+        </details>
       </div>
 
       <p className="muted">Tip: loops repeat actions, and conditions let robots adapt to the map.</p>

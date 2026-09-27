@@ -2,7 +2,7 @@ export type PlayerId = 'human' | 'explorer-ai' | 'scientist-ai' | 'conqueror-ai'
 export type TerrainType = 'plains' | 'forest' | 'mountain' | 'water' | 'crystal' | 'village' | 'ruins'
 export type ResourceType = 'wood' | 'energy' | 'crystal' | 'food'
 export type BuildingType = 'base' | 'farm' | 'laboratory' | 'mine' | 'workshop'
-export type UnitRole = 'worker' | 'explorer'
+export type UnitRole = 'worker' | 'explorer' | 'attack' | 'defender'
 export type Direction = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'
 export type GameMode = 'quick' | 'vs-ai' | 'multiplayer' | 'tutorial'
 export type TechType = 'basic-logic' | 'conditions' | 'automation'
@@ -41,9 +41,12 @@ export interface UnitState {
   playerId: PlayerId
   name: string
   role: UnitRole
+  level: number
   x: number
   y: number
   energy: number
+  trainingsUsed: number
+  isDefending: boolean
   program: ProgramNode[]
 }
 
@@ -85,9 +88,10 @@ export interface GameState {
 
 export interface ActionNode {
   id: string
-  type: 'MOVE' | 'COLLECT' | 'BUILD' | 'WAIT'
+  type: 'MOVE' | 'COLLECT' | 'BUILD' | 'TRAIN' | 'UPGRADE' | 'ATTACK' | 'DEFEND' | 'WAIT'
   direction?: Direction
   buildingType?: BuildingType
+  recruitRole?: UnitRole
 }
 
 export interface RepeatNode {
@@ -110,7 +114,8 @@ export type ProgramNode = ActionNode | RepeatNode | IfNode
 export interface ResolvedAction {
   unitId: string
   playerId: PlayerId
-  type: 'MOVE' | 'COLLECT' | 'BUILD' | 'WAIT'
+  type: 'MOVE' | 'COLLECT' | 'BUILD' | 'TRAIN' | 'UPGRADE' | 'ATTACK' | 'DEFEND' | 'WAIT'
   direction?: Direction
   buildingType?: BuildingType
+  recruitRole?: UnitRole
 }

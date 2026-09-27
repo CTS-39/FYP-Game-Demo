@@ -31,6 +31,8 @@ const buildingIcons = {
 const roleIcons = {
   worker: '🤖',
   explorer: '🚀',
+  attack: '⚔️',
+  defender: '🛡️',
 }
 
 export function GameBoard({ game, onSelectUnit, selectedTile, onSelectTile }: GameBoardProps) {
